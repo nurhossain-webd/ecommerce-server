@@ -1567,3 +1567,751 @@ src/
 ```
 
 Then our services will eventually use that Prisma client to communicate with PostgreSQL.
+
+
+---
+
+# Stage 3 — Prisma Client + User Service + User Routes
+
+This stage adds Prisma Client to the Express backend and creates the first User API routes.
+
+## 29. Generate Prisma Client
+
+Run:
+
+```bash
+npx prisma generate
+```
+
+Our Prisma schema uses the newer client generator, similar to:
+
+```prisma
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+```
+
+So the generated client is placed inside:
+
+```text
+src/generated/prisma/
+```
+
+## 30. Prisma Client Import Issue
+
+This did not work in our project:
+
+```ts
+import { PrismaClient } from "@prisma/client";
+```
+
+Error:
+
+```text
+Module '"@prisma/client"' has no exported member 'PrismaClient'.
+```
+
+Because we are using the newer `prisma-client` generator, we import Prisma Client from the generated output folder instead:
+
+```ts
+import { PrismaClient } from "../generated/prisma/client.js";
+```
+
+## 31. Prisma 7 Requires a PostgreSQL Adapter
+
+This:
+
+```ts
+const prisma = new PrismaClient();
+```
+
+gave:
+
+```text
+Expected 1 arguments, but got 0.
+```
+
+For our Prisma 7 setup, install the PostgreSQL adapter:
+
+```bash
+npm install @prisma/adapter-pg pg
+```
+
+## 32. Create `src/lib/prisma.ts`
+
+Create:
+
+```text
+src/lib/prisma.ts
+```
+
+Code:
+
+```ts
+import "dotenv/config";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaClient } from "../generated/prisma/client.js";
+
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL!,
+});
+
+const prisma = new PrismaClient({
+  adapter,
+});
+
+export default prisma;
+```
+
+### How this works
+
+`import "dotenv/config";` loads `.env`, so Node can access:
+
+```ts
+process.env.DATABASE_URL
+```
+
+`PrismaPg` is the PostgreSQL adapter.
+
+Then:
+
+```ts
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL!,
+});
+```
+
+creates a PostgreSQL connection using our Neon database URL.
+
+The `!` tells TypeScript that we expect `DATABASE_URL` to exist.
+
+Then:
+
+```ts
+const prisma = new PrismaClient({
+  adapter,
+});
+```
+
+creates Prisma Client using that PostgreSQL adapter.
+
+Flow:
+
+```text
+Backend
+  ↓
+Prisma Client
+  ↓
+PostgreSQL Adapter
+  ↓
+DATABASE_URL
+  ↓
+Neon PostgreSQL
+```
+
+Finally:
+
+```ts
+export default prisma;
+```
+
+lets our services reuse the same Prisma client.
+
+## 33. Why We Use a Services Folder
+
+We created:
+
+```text
+src/services/user/user.service.ts
+```
+
+Services contain business and database logic.
+
+General flow:
+
+```text
+Frontend
+   ↓
+Route
+   ↓
+Service
+   ↓
+Prisma
+   ↓
+PostgreSQL
+```
+
+Real-life example:
+
+```text
+Customer clicks "Place Order"
+        ↓
+POST /api/orders
+        ↓
+Order route
+        ↓
+Order service
+        ↓
+Check stock / calculate total / create order
+        ↓
+Prisma
+        ↓
+PostgreSQL
+```
+
+Simple analogy:
+
+```text
+Frontend = Customer
+Route    = Waiter
+Service  = Kitchen
+Database = Storage
+```
+
+## 34. Current `user.service.ts`
+
+```ts
+import prisma from "../../lib/prisma.js";
+
+const getAllUsers = async () => {
+  const users = await prisma.user.findMany();
+
+  return users;
+};
+
+const createUser = async (data: {
+  name: string;
+  email: string;
+  password: string;
+}) => {
+  const user = await prisma.user.create({
+    data: data,
+  });
+
+  return user;
+};
+
+const getUserById = async (id: string) => {
+  const user = await prisma.user.findUnique({
+    where: {
+      id: id,
+    },
+  });
+
+  return user;
+};
+
+export const userService = {
+  getAllUsers,
+  createUser,
+  getUserById,
+};
+```
+
+## 35. `getAllUsers()`
+
+```ts
+const getAllUsers = async () => {
+  const users = await prisma.user.findMany();
+
+  return users;
+};
+```
+
+`prisma.user.findMany()` means:
+
+```text
+Prisma
+  ↓
+User model
+  ↓
+Find all rows
+  ↓
+PostgreSQL users table
+```
+
+## 36. `createUser()`
+
+```ts
+const createUser = async (data: {
+  name: string;
+  email: string;
+  password: string;
+}) => {
+  const user = await prisma.user.create({
+    data: data,
+  });
+
+  return user;
+};
+```
+
+The function receives `name`, `email`, and `password`.
+
+Then Prisma inserts that data into PostgreSQL.
+
+Important: the password is still plain text only for learning CRUD. Before real authentication we will hash it with bcrypt.
+
+## 37. `getUserById()`
+
+```ts
+const getUserById = async (id: string) => {
+  const user = await prisma.user.findUnique({
+    where: {
+      id: id,
+    },
+  });
+
+  return user;
+};
+```
+
+This means:
+
+```text
+Find the user WHERE database id equals the id we received.
+```
+
+`where` is a Prisma property and should not be renamed.
+
+This can also be shortened to:
+
+```ts
+where: {
+  id,
+}
+```
+
+## 38. Create the User Router
+
+Current `src/routes/user.route.ts`:
+
+```ts
+import { Router } from "express";
+import { userService } from "../services/user/user.service.js";
+
+const router = Router();
+
+router.get("/", async (req, res) => {
+  const users = await userService.getAllUsers();
+
+  res.json({
+    success: true,
+    message: "Users retrieved successfully",
+    data: users,
+  });
+});
+
+router.get("/:id", async (req, res) => {
+  const id = req.params.id;
+
+  const user = await userService.getUserById(id);
+
+  if (!user) {
+    return res.status(404).json({
+      success: false,
+      message: "User not found",
+    });
+  }
+
+  res.json({
+    success: true,
+    message: "User retrieved successfully",
+    data: user,
+  });
+});
+
+router.post("/", async (req, res) => {
+  const data = req.body;
+
+  const user = await userService.createUser(data);
+
+  res.json({
+    success: true,
+    message: "User created successfully",
+    data: user,
+  });
+});
+
+export default router;
+```
+
+## 39. Why Use `Router()`?
+
+We could put all endpoints directly in `app.ts`, but that would make it very large.
+
+Instead we organize them:
+
+```text
+routes/
+├── user.route.ts
+├── product.route.ts
+├── category.route.ts
+└── order.route.ts
+```
+
+## 40. Connect User Router to `app.ts`
+
+Import:
+
+```ts
+import userRouter from "./routes/user.route.js";
+```
+
+Then:
+
+```ts
+app.use("/api/users", userRouter);
+```
+
+This gives the router a base URL.
+
+So:
+
+```ts
+router.get("/")
+```
+
+becomes:
+
+```text
+GET /api/users
+```
+
+`router.post("/")` becomes:
+
+```text
+POST /api/users
+```
+
+and:
+
+```ts
+router.get("/:id")
+```
+
+becomes:
+
+```text
+GET /api/users/:id
+```
+
+## 41. Enable JSON Request Bodies
+
+Add to `app.ts`:
+
+```ts
+app.use(express.json());
+```
+
+This lets Express read JSON using:
+
+```ts
+req.body
+```
+
+Flow:
+
+```text
+Frontend sends JSON
+       ↓
+express.json()
+       ↓
+req.body
+       ↓
+Route
+```
+
+## 42. Current Important `app.ts`
+
+```ts
+import express from "express";
+import userRouter from "./routes/user.route.js";
+
+const app = express();
+
+app.use(express.json());
+
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    message: "Server is running",
+  });
+});
+
+app.use("/api/users", userRouter);
+
+export default app;
+```
+
+## 43. Available User Endpoints
+
+```text
+GET  /api/users       → Get all users
+GET  /api/users/:id   → Get one user by ID
+POST /api/users       → Create a user
+```
+
+## 44. Create a User with Terminal
+
+Make sure the server is running:
+
+```bash
+npm run dev
+```
+
+Then:
+
+```bash
+curl -X POST http://localhost:5001/api/users \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Riyad",
+    "email": "riyad@example.com",
+    "password": "123456"
+  }'
+```
+
+`-X POST` sends a POST request.
+
+`Content-Type: application/json` tells Express that the request body is JSON.
+
+`-d` contains the body data.
+
+## 45. Check Created Users
+
+Run:
+
+```bash
+curl http://localhost:5001/api/users
+```
+
+Or inspect the database using:
+
+```bash
+npx prisma studio
+```
+
+`curl` tests the API.
+
+Prisma Studio checks the database directly.
+
+## 46. Test GET User By ID
+
+First:
+
+```bash
+curl http://localhost:5001/api/users
+```
+
+Copy one user's UUID.
+
+Then:
+
+```bash
+curl http://localhost:5001/api/users/YOUR_USER_ID
+```
+
+## 47. 404 User Not Found
+
+If Prisma returns no user:
+
+```ts
+if (!user) {
+  return res.status(404).json({
+    success: false,
+    message: "User not found",
+  });
+}
+```
+
+HTTP `404` means `Not Found`.
+
+## 48. Port 5000 Returned HTTP 403
+
+We encountered:
+
+```text
+HTTP ERROR 403
+```
+
+on port `5000`.
+
+Another process was likely using that port, so we changed:
+
+```ts
+const PORT = 5000;
+```
+
+to:
+
+```ts
+const PORT = 5001;
+```
+
+Then restarted the server.
+
+## 49. `Cannot GET /api/users`
+
+We then encountered:
+
+```text
+Cannot GET /api/users
+```
+
+This means Express was running, but the route was not registered correctly.
+
+The required connection is:
+
+```ts
+app.use("/api/users", userRouter);
+```
+
+plus:
+
+```ts
+router.get("/", ...)
+```
+
+Together:
+
+```text
+/api/users + /
+       ↓
+GET /api/users
+```
+
+After fixing/checking the route and restarting the server, it worked.
+
+## 50. Invalid UUID Error
+
+We tested:
+
+```text
+http://localhost:5001/api/users/123
+```
+
+and Prisma returned:
+
+```text
+invalid input syntax for type uuid: "123"
+```
+
+Our User ID is:
+
+```prisma
+id String @id @default(uuid()) @db.Uuid
+```
+
+So PostgreSQL expects a valid UUID.
+
+A valid UUID looks like:
+
+```text
+550e8400-e29b-41d4-a716-446655440000
+```
+
+Later we will add validation so invalid IDs return a clean API error instead of a Prisma error page.
+
+## 51. Current Request Flow
+
+Get all users:
+
+```text
+GET /api/users
+      ↓
+app.use("/api/users", userRouter)
+      ↓
+router.get("/")
+      ↓
+userService.getAllUsers()
+      ↓
+prisma.user.findMany()
+      ↓
+PostgreSQL
+      ↓
+res.json(...)
+```
+
+Create user:
+
+```text
+POST /api/users
+      ↓
+express.json()
+      ↓
+req.body
+      ↓
+router.post("/")
+      ↓
+userService.createUser(data)
+      ↓
+prisma.user.create()
+      ↓
+PostgreSQL
+```
+
+## 52. Updated Project Structure
+
+```text
+ecommerce-server/
+│
+├── prisma/
+│   ├── migrations/
+│   │   └── 20260808181129_create_user_table/
+│   │       └── migration.sql
+│   └── schema.prisma
+│
+├── src/
+│   ├── generated/
+│   │   └── prisma/
+│   │       └── ...
+│   ├── lib/
+│   │   └── prisma.ts
+│   ├── routes/
+│   │   └── user.route.ts
+│   ├── services/
+│   │   └── user/
+│   │       └── user.service.ts
+│   ├── app.ts
+│   └── server.ts
+│
+├── .env
+├── .gitignore
+├── package.json
+├── package-lock.json
+├── prisma.config.ts
+├── README.md
+└── tsconfig.json
+```
+
+Remember: `.env` must not be pushed to GitHub.
+
+## 53. Git Checkpoint 3
+
+Before committing:
+
+```bash
+git status
+```
+
+Then:
+
+```bash
+git add .
+git commit -m "add Prisma client and user CRUD routes"
+git push
+```
+
+## Next Stage
+
+Next we will add:
+
+```text
+Update User
+     ↓
+Soft Delete User
+```
+
+Then continue with more models, relations, authentication, bcrypt, and JWT.
