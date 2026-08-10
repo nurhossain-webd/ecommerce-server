@@ -345,7 +345,7 @@ app.ts
 we write:
 
 ```ts
-"./app.js"
+"./app.js";
 ```
 
 because we are using:
@@ -691,7 +691,6 @@ Migrations
 
 These steps should be added to this README as the project grows.
 
-
 ---
 
 # Stage 2 — PostgreSQL + Prisma Setup
@@ -863,7 +862,7 @@ loads environment variables from `.env`.
 Then:
 
 ```ts
-schema: "prisma/schema.prisma"
+schema: "prisma/schema.prisma";
 ```
 
 tells Prisma where our Prisma schema is.
@@ -1568,7 +1567,6 @@ src/
 
 Then our services will eventually use that Prisma client to communicate with PostgreSQL.
 
-
 ---
 
 # Stage 3 — Prisma Client + User Service + User Routes
@@ -1669,7 +1667,7 @@ export default prisma;
 `import "dotenv/config";` loads `.env`, so Node can access:
 
 ```ts
-process.env.DATABASE_URL
+process.env.DATABASE_URL;
 ```
 
 `PrismaPg` is the PostgreSQL adapter.
@@ -1970,7 +1968,7 @@ This gives the router a base URL.
 So:
 
 ```ts
-router.get("/")
+router.get("/");
 ```
 
 becomes:
@@ -1988,7 +1986,7 @@ POST /api/users
 and:
 
 ```ts
-router.get("/:id")
+router.get("/:id");
 ```
 
 becomes:
@@ -2008,7 +2006,7 @@ app.use(express.json());
 This lets Express read JSON using:
 
 ```ts
-req.body
+req.body;
 ```
 
 Flow:
@@ -2304,14 +2302,155 @@ git commit -m "add Prisma client and user CRUD routes"
 git push
 ```
 
-## Next Stage
+# User CRUD --- Update and Soft Delete
 
-Next we will add:
+## Update User
 
-```text
-Update User
-     ↓
-Soft Delete User
+Added `updateUser()` using `prisma.user.update()`. The user ID
+identifies which record to update, while `data` contains optional fields
+such as `name` and `email`.
+
+```ts
+const updateUser = async (
+  id: string,
+  data: {
+    name?: string;
+    email?: string;
+  },
+) => {
+  const user = await prisma.user.update({
+    where: { id: id },
+    data: data,
+  });
+
+  return user;
+};
 ```
 
-Then continue with more models, relations, authentication, bcrypt, and JWT.
+Added the route:
+
+```ts
+router.patch("/:id", async (req, res) => {
+  const id = req.params.id;
+  const data = req.body;
+
+  const user = await userService.updateUser(id, data);
+
+  res.json({
+    success: true,
+    message: "User updated successfully",
+    data: user,
+  });
+});
+```
+
+Endpoint:
+
+```text
+PATCH /api/users/:id
+```
+
+Test:
+
+```bash
+curl -X PATCH http://localhost:5001/api/users/YOUR_USER_ID \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Riyad Updated"}'
+```
+
+## Soft Delete User
+
+Instead of permanently deleting a row with `prisma.user.delete()`, the
+project uses soft delete by changing `isDeleted` from `false` to `true`.
+
+```ts
+const deleteUser = async (id: string) => {
+  const user = await prisma.user.update({
+    where: { id: id },
+    data: {
+      isDeleted: true,
+    },
+  });
+
+  return user;
+};
+```
+
+Added the route:
+
+```ts
+router.delete("/:id", async (req, res) => {
+  const id = req.params.id;
+  const user = await userService.deleteUser(id);
+
+  res.json({
+    success: true,
+    message: "User deleted successfully",
+    data: user,
+  });
+});
+```
+
+Endpoint:
+
+```text
+DELETE /api/users/:id
+```
+
+Test:
+
+```bash
+curl -X DELETE http://localhost:5001/api/users/YOUR_USER_ID
+```
+
+## Hide Soft-Deleted Users
+
+Updated `getAllUsers()` so normal API requests return only active users:
+
+```ts
+const getAllUsers = async () => {
+  const users = await prisma.user.findMany({
+    where: {
+      isDeleted: false,
+    },
+  });
+
+  return users;
+};
+```
+
+Updated `getUserById()` so a soft-deleted user is not returned:
+
+```ts
+const getUserById = async (id: string) => {
+  const user = await prisma.user.findUnique({
+    where: {
+      id: id,
+      isDeleted: false,
+    },
+  });
+
+  return user;
+};
+```
+
+## User CRUD Status
+
+```text
+POST   /api/users       → Create User
+GET    /api/users       → Get All Active Users
+GET    /api/users/:id   → Get Active User By ID
+PATCH  /api/users/:id   → Update User
+DELETE /api/users/:id   → Soft Delete User
+```
+
+User CRUD with soft-delete support is now complete.
+
+## Git Checkpoint
+
+```bash
+git status
+git add .
+git commit -m "complete user CRUD with soft delete"
+git push
+```

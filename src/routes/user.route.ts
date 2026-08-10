@@ -41,5 +41,28 @@ router.post('/', async (req, res) => {
 });
 })
 
+router.patch('/:id', async (req, res) => {
+    const id = req.params.id;
+    const data = req.body;
+    const user = await userService.updateUser(id, data);
+
+    res.json({
+        success: true,
+        message: "User updated successfully",
+        data: user
+    });
+})
+
+router.delete('/:id', async (req, res) => {
+    const id = req.params.id;
+    const user = await userService.deleteUser(id);
+
+    res.json({
+        success: true,
+        message: "User deleted successfully",
+        data: user
+    });
+});
+
 export default router;
 
