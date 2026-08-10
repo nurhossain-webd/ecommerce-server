@@ -22,6 +22,7 @@ model User {
   isDeleted Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  reviews   Review[]
 
   @@map("users")
 }
@@ -62,7 +63,27 @@ model Product {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  reviews   Review[]
 
   @@index([categoryId])
   @@map("products")
+}
+model Review {
+  id        String   @id @default(uuid()) @db.Uuid
+  rating    Int
+  comment   String?
+  isDeleted Boolean  @default(false)
+
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id])
+
+  productId String   @db.Uuid
+  product   Product  @relation(fields: [productId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([productId])
+  @@map("reviews")
 }

@@ -2807,3 +2807,141 @@ git add .
 git commit -m "add product CRUD and category relation"
 git push
 ```
+
+# Review Model and Review API
+
+## Review Model
+
+Added the `Review` model with `rating`, optional `comment`, soft delete, timestamps, and relations to User and Product.
+
+```prisma
+userId    String  @db.Uuid
+user      User    @relation(fields: [userId], references: [id])
+
+productId String  @db.Uuid
+product   Product @relation(fields: [productId], references: [id])
+```
+
+Added the opposite relation to `User` and `Product`:
+
+```prisma
+reviews Review[]
+```
+
+Relationship:
+
+```text
+User    → has many Reviews
+Product → has many Reviews
+Review  → belongs to one User and one Product
+```
+
+## Migration
+
+```bash
+npx prisma migrate dev --name create_review_table
+npx prisma generate
+```
+
+This created:
+
+```text
+reviews.userId    → users.id
+reviews.productId → products.id
+```
+
+## Review Service and Router
+
+Created:
+
+```text
+src/services/review/review.service.ts
+src/routes/review.route.ts
+```
+
+Implemented:
+
+```text
+GET  /api/reviews
+POST /api/reviews
+```
+
+Used:
+
+```ts
+include: {
+  user: true,
+  product: true,
+}
+```
+
+so GET reviews returns the related User and Product information.
+
+Connected the router:
+
+```ts
+app.use("/api/reviews", reviewRouter);
+```
+
+## Testing
+
+A User, Category, and Product were created first because Review requires valid `userId` and `productId` values.
+
+```bash
+curl -X POST http://localhost:5001/api/reviews \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rating": 5,
+    "comment": "Excellent product",
+    "userId": "YOUR_USER_ID",
+    "productId": "YOUR_PRODUCT_ID"
+  }'
+```
+
+Then tested:
+
+```bash
+curl http://localhost:5001/api/reviews
+```
+
+Review creation and retrieval worked successfully.
+
+## Issue Encountered
+
+The GET Review API initially returned the incorrect message:
+
+```text
+Product route is working
+```
+
+The Review data itself was correct. The response message was changed to:
+
+```ts
+message: "Reviews retrieved successfully";
+```
+
+## Security Issue Identified
+
+The included User object currently exposes the password in the API response. Passwords must never be returned to clients. This will be fixed during the authentication/security implementation with password hashing and safe response selection.
+
+## Current Status
+
+```text
+Review Model              ✅
+User → Review Relation    ✅
+Product → Review Relation ✅
+Create Review             ✅
+Get All Reviews           ✅
+Include User              ✅
+Include Product           ✅
+API Testing               ✅
+```
+
+## Git Checkpoint
+
+```bash
+git status
+git add .
+git commit -m "add review model service and routes"
+git push
+```
