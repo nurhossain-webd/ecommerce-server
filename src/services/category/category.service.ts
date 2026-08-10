@@ -50,5 +50,6 @@ export const categoryService = {
     createCategory, 
     getCategoryById,
     updateCategory,
-    deleteCategory  
+    deleteCategory,
+     
 } 

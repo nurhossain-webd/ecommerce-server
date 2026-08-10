@@ -2603,3 +2603,207 @@ git add .
 git commit -m "complete category CRUD"
 git push
 ```
+
+# Product Model, Category Relation, and Product CRUD
+
+## Product Model and Relation
+
+Added `ProductStatus` and the `Product` model. Each product has its own UUID and a `categoryId` foreign key pointing to `Category.id`.
+
+```prisma
+categoryId String   @db.Uuid
+category   Category @relation(fields: [categoryId], references: [id])
+```
+
+Added the opposite side to `Category`:
+
+```prisma
+products Product[]
+```
+
+Relationship:
+
+```text
+Category → has many Products
+Product  → belongs to one Category
+```
+
+The first migration failed because the opposite `products Product[]` relation was missing from `Category`. After adding it:
+
+```bash
+npx prisma migrate dev --name create_product_table
+npx prisma generate
+```
+
+## Product Service and Router
+
+Created Product service/router with:
+
+```text
+GET    /api/products
+GET    /api/products/:id
+POST   /api/products
+PATCH  /api/products/:id
+DELETE /api/products/:id
+```
+
+Creating a product requires a real category UUID:
+
+```json
+{
+  "name": "iPhone 17",
+  "description": "Latest iPhone",
+  "price": 999,
+  "stock": 10,
+  "categoryId": "CATEGORY_UUID"
+}
+```
+
+Used the Prisma relation:
+
+```ts
+include: {
+  category: true,
+}
+```
+
+so product GET requests can also return the related Category information.
+
+Update supports optional fields such as `name`, `description`, `price`, `stock`, `status`, and `categoryId`.
+
+Soft delete uses `prisma.product.update()` to set:
+
+```ts
+isDeleted: true;
+```
+
+Normal product queries filter with `isDeleted: false`.
+
+## Testing
+
+```bash
+curl http://localhost:5001/api/products
+```
+
+```bash
+curl -X PATCH http://localhost:5001/api/products/YOUR_PRODUCT_ID \
+  -H "Content-Type: application/json" \
+  -d '{"price":899,"stock":20}'
+```
+
+```bash
+curl -X DELETE http://localhost:5001/api/products/YOUR_PRODUCT_ID
+```
+
+Product CRUD and the Category → Product relationship are now implemented and tested.
+
+## Git Checkpoint
+
+```bash
+git status
+git add .
+git commit -m "add product CRUD and category relation"
+git push
+```
+
+# Product Model, Category Relation, and Product CRUD
+
+## Product Model and Relation
+
+Added `ProductStatus` and the `Product` model. Each product has its own UUID and a `categoryId` foreign key pointing to `Category.id`.
+
+```prisma
+categoryId String   @db.Uuid
+category   Category @relation(fields: [categoryId], references: [id])
+```
+
+Added the opposite side to `Category`:
+
+```prisma
+products Product[]
+```
+
+Relationship:
+
+```text
+Category → has many Products
+Product  → belongs to one Category
+```
+
+The first migration failed because the opposite `products Product[]` relation was missing from `Category`. After adding it:
+
+```bash
+npx prisma migrate dev --name create_product_table
+npx prisma generate
+```
+
+## Product Service and Router
+
+Created Product service/router with:
+
+```text
+GET    /api/products
+GET    /api/products/:id
+POST   /api/products
+PATCH  /api/products/:id
+DELETE /api/products/:id
+```
+
+Creating a product requires a real category UUID:
+
+```json
+{
+  "name": "iPhone 17",
+  "description": "Latest iPhone",
+  "price": 999,
+  "stock": 10,
+  "categoryId": "CATEGORY_UUID"
+}
+```
+
+Used the Prisma relation:
+
+```ts
+include: {
+  category: true,
+}
+```
+
+so product GET requests can also return the related Category information.
+
+Update supports optional fields such as `name`, `description`, `price`, `stock`, `status`, and `categoryId`.
+
+Soft delete uses `prisma.product.update()` to set:
+
+```ts
+isDeleted: true;
+```
+
+Normal product queries filter with `isDeleted: false`.
+
+## Testing
+
+```bash
+curl http://localhost:5001/api/products
+```
+
+```bash
+curl -X PATCH http://localhost:5001/api/products/YOUR_PRODUCT_ID \
+  -H "Content-Type: application/json" \
+  -d '{"price":899,"stock":20}'
+```
+
+```bash
+curl -X DELETE http://localhost:5001/api/products/YOUR_PRODUCT_ID
+```
+
+Product CRUD and the Category → Product relationship are now implemented and tested.
+
+## Git Checkpoint
+
+```bash
+git status
+git add .
+git commit -m "add product CRUD and category relation"
+git push
+```
