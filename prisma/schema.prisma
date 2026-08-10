@@ -25,3 +25,19 @@ model User {
 
   @@map("users")
 }
+
+enum CategoryStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Category {
+  id        String         @id @default(uuid()) @db.Uuid
+  name      String         @unique
+  status    CategoryStatus @default(ACTIVE)
+  isDeleted Boolean        @default(false)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@map("categories")
+}

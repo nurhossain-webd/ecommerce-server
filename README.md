@@ -2454,3 +2454,152 @@ git add .
 git commit -m "complete user CRUD with soft delete"
 git push
 ```
+
+# Category CRUD
+
+## Category Model
+
+Added `CategoryStatus` and `Category` to `prisma/schema.prisma`:
+
+```prisma
+enum CategoryStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Category {
+  id        String         @id @default(uuid()) @db.Uuid
+  name      String         @unique
+  status    CategoryStatus @default(ACTIVE)
+  isDeleted Boolean        @default(false)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@map("categories")
+}
+```
+
+After changing the Prisma schema:
+
+```bash
+npx prisma migrate dev --name create_category_table
+npx prisma generate
+```
+
+Remember:
+
+```text
+migrate  → updates PostgreSQL
+generate → updates Prisma Client
+```
+
+## Category Service
+
+Created:
+
+```text
+src/services/category/category.service.ts
+```
+
+The service supports:
+
+```text
+Get all categories
+Create category
+Get category by ID
+Update category
+Soft delete category
+```
+
+Soft-deleted categories are filtered using:
+
+```ts
+where: {
+  isDeleted: false,
+}
+```
+
+For updates, enum values must match Prisma exactly:
+
+```text
+ACTIVE
+INACTIVE
+```
+
+Using `Active` or `Inactive` causes a TypeScript error.
+
+Soft delete uses:
+
+```ts
+prisma.category.update({
+  where: { id },
+  data: {
+    isDeleted: true,
+  },
+});
+```
+
+instead of permanently deleting the row.
+
+## Category Router
+
+Created:
+
+```text
+src/routes/category.route.ts
+```
+
+Connected it in `app.ts`:
+
+```ts
+app.use("/api/categories", categoryRouter);
+```
+
+Available endpoints:
+
+```text
+GET    /api/categories
+GET    /api/categories/:id
+POST   /api/categories
+PATCH  /api/categories/:id
+DELETE /api/categories/:id
+```
+
+## API Testing
+
+Create category:
+
+```bash
+curl -X POST http://localhost:5001/api/categories   -H "Content-Type: application/json"   -d '{"name":"Electronics"}'
+```
+
+Get all categories:
+
+```bash
+curl http://localhost:5001/api/categories
+```
+
+Update category:
+
+```bash
+curl -X PATCH http://localhost:5001/api/categories/YOUR_CATEGORY_ID   -H "Content-Type: application/json"   -d '{"name":"Mobile Devices","status":"INACTIVE"}'
+```
+
+Soft delete category:
+
+```bash
+curl -X DELETE http://localhost:5001/api/categories/YOUR_CATEGORY_ID
+```
+
+Category CRUD is now complete.
+
+## Git Checkpoint
+
+After adding this section to the main `README.md`:
+
+```bash
+git status
+git add .
+git commit -m "complete category CRUD"
+git push
+```
