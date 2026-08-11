@@ -5366,3 +5366,608 @@ git add .
 git commit -m "add order ownership and error handling"
 git push
 ```
+
+# Role-Based Authorization (RBAC) with JWT
+
+This section documents how role-based authorization was added on top of the existing JWT authentication system.
+
+## Authentication vs Authorization
+
+Authentication asks:
+
+```text
+Who is this user?
+```
+
+Authorization asks:
+
+```text
+What is this user allowed to do?
+```
+
+The backend now uses both.
+
+## Add Role to JWT
+
+Previously, JWT only stored the User ID:
+
+```ts
+const token = jwt.sign(
+  {
+    id: user.id,
+  },
+  process.env.JWT_SECRET as string,
+  {
+    expiresIn: "7d",
+  },
+);
+```
+
+Now it also stores role:
+
+```ts
+const token = jwt.sign(
+  {
+    id: user.id,
+    role: user.role,
+  },
+  process.env.JWT_SECRET as string,
+  {
+    expiresIn: "7d",
+  },
+);
+```
+
+Now the token can tell us both:
+
+```text
+id   -> who the User is
+role -> USER or ADMIN
+```
+
+## Safe Login Response
+
+The login response returns only safe User fields:
+
+```ts
+return {
+  user: {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+  },
+  token,
+};
+```
+
+This avoids returning the stored password hash.
+
+## Add Role to `req.user`
+
+Updated:
+
+```text
+src/types/express.d.ts
+```
+
+```ts
+import "express";
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: {
+        id: string;
+        role: "USER" | "ADMIN";
+      };
+    }
+  }
+}
+```
+
+This tells TypeScript that `req.user` can contain both `id` and `role`.
+
+## Update Auth Middleware
+
+After `jwt.verify()`:
+
+```ts
+const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as {
+  id: string;
+  role: "USER" | "ADMIN";
+};
+```
+
+Then:
+
+```ts
+req.user = {
+  id: decoded.id,
+  role: decoded.role,
+};
+```
+
+Flow:
+
+```text
+JWT
+↓
+jwt.verify()
+↓
+decoded.id + decoded.role
+↓
+req.user.id + req.user.role
+```
+
+## Create Authorization Middleware
+
+Created:
+
+```text
+src/middleware/authorize.middleware.ts
+```
+
+```ts
+import { NextFunction, Request, Response } from "express";
+
+export const authorize = (...allowedRoles: ("USER" | "ADMIN")[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const userRole = req.user?.role;
+
+    if (!userRole || !allowedRoles.includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden",
+      });
+    }
+
+    next();
+  };
+};
+```
+
+## Why `...allowedRoles`?
+
+This is a rest parameter.
+
+```ts
+authorize("ADMIN");
+```
+
+becomes:
+
+```text
+allowedRoles = ["ADMIN"]
+```
+
+And:
+
+```ts
+authorize("USER", "ADMIN");
+```
+
+becomes:
+
+```text
+allowedRoles = ["USER", "ADMIN"]
+```
+
+This makes the middleware reusable.
+
+## Why `authorize()` Returns Another Function
+
+This:
+
+```ts
+authorize("ADMIN");
+```
+
+creates a middleware configured for ADMIN access.
+
+Conceptually:
+
+```text
+authorize("ADMIN")
+↓
+returns Express middleware
+↓
+middleware checks req.user.role
+```
+
+## Role Check
+
+Inside:
+
+```ts
+const userRole = req.user?.role;
+```
+
+The role comes from the verified JWT.
+
+Then:
+
+```ts
+allowedRoles.includes(userRole);
+```
+
+checks whether the User's role is allowed.
+
+For ADMIN:
+
+```text
+["ADMIN"].includes("ADMIN")
+→ true
+```
+
+For USER:
+
+```text
+["ADMIN"].includes("USER")
+→ false
+```
+
+## Why 403 Forbidden?
+
+If the User is logged in but does not have permission:
+
+```ts
+return res.status(403).json({
+  success: false,
+  message: "Forbidden",
+});
+```
+
+Important difference:
+
+```text
+401 Unauthorized
+→ invalid/missing authentication
+
+403 Forbidden
+→ authenticated successfully
+→ but not allowed
+```
+
+## Middleware Order
+
+Correct:
+
+```ts
+(auth, authorize("ADMIN"));
+```
+
+Why?
+
+`auth` creates:
+
+```text
+req.user
+```
+
+Then `authorize` reads:
+
+```text
+req.user.role
+```
+
+So the correct order is:
+
+```text
+auth
+↓
+req.user created
+↓
+authorize
+↓
+role checked
+```
+
+## Make User Routes ADMIN-Only
+
+Added:
+
+```ts
+import { auth } from "../middleware/auth.middleware.js";
+import { authorize } from "../middleware/authorize.middleware.js";
+```
+
+Then applied:
+
+```ts
+router.get("/", auth, authorize("ADMIN"), ...)
+router.get("/:id", auth, authorize("ADMIN"), ...)
+router.post("/", auth, authorize("ADMIN"), ...)
+router.patch("/:id", auth, authorize("ADMIN"), ...)
+router.delete("/:id", auth, authorize("ADMIN"), ...)
+```
+
+So each User CRUD request goes through:
+
+```text
+JWT verification
+↓
+role verification
+↓
+route
+```
+
+## Create ADMIN Test User
+
+A test User was manually changed in Prisma Studio from:
+
+```text
+USER
+```
+
+to:
+
+```text
+ADMIN
+```
+
+The test ADMIN account used:
+
+```text
+riyadauth@example.com
+```
+
+## Why Login Again After Changing Role?
+
+The old JWT still contained the old role.
+
+Changing PostgreSQL does not change an already-issued JWT.
+
+Example:
+
+```text
+Old JWT:
+role = USER
+```
+
+Then database changed to:
+
+```text
+role = ADMIN
+```
+
+The old JWT remains:
+
+```text
+role = USER
+```
+
+So a new login is required.
+
+New login:
+
+```text
+reads current database role
+↓
+jwt.sign()
+↓
+new JWT contains ADMIN
+```
+
+## Test ADMIN Access
+
+Logged in again as the ADMIN User and received a JWT containing:
+
+```json
+{
+  "role": "ADMIN"
+}
+```
+
+Then tested:
+
+```bash
+curl http://localhost:5001/api/users   -H "Authorization: Bearer ADMIN_JWT"
+```
+
+Result:
+
+```text
+Users retrieved successfully
+```
+
+This confirmed:
+
+```text
+ADMIN JWT
+↓
+auth passed
+↓
+authorize("ADMIN") passed
+↓
+route allowed
+```
+
+## Create Fresh Normal USER
+
+Some older test Users were created before bcrypt hashing was enabled.
+
+A fresh User was created after bcrypt support so the password was stored correctly as a bcrypt hash.
+
+Example:
+
+```text
+normaluser@example.com
+role = USER
+```
+
+Because the Prisma model uses:
+
+```prisma
+role UserRole @default(USER)
+```
+
+the role was assigned automatically.
+
+## Test USER Login
+
+The normal User logged in successfully and received a JWT containing:
+
+```json
+{
+  "role": "USER"
+}
+```
+
+## Test USER Against ADMIN Route
+
+Then tested:
+
+```bash
+curl http://localhost:5001/api/users   -H "Authorization: Bearer USER_JWT"
+```
+
+Result:
+
+```json
+{
+  "success": false,
+  "message": "Forbidden"
+}
+```
+
+This confirms:
+
+```text
+USER authenticated ✅
+ADMIN permission ❌
+403 Forbidden ✅
+```
+
+## Complete RBAC Flow
+
+### ADMIN
+
+```text
+Login
+↓
+JWT contains role ADMIN
+↓
+auth
+↓
+req.user.role = ADMIN
+↓
+authorize("ADMIN")
+↓
+allowed
+↓
+route runs
+```
+
+### USER
+
+```text
+Login
+↓
+JWT contains role USER
+↓
+auth
+↓
+req.user.role = USER
+↓
+authorize("ADMIN")
+↓
+denied
+↓
+403 Forbidden
+```
+
+## Reusable Authorization
+
+ADMIN only:
+
+```ts
+authorize("ADMIN");
+```
+
+USER only:
+
+```ts
+authorize("USER");
+```
+
+Either:
+
+```ts
+authorize("USER", "ADMIN");
+```
+
+## Important Security Note
+
+Because role is stored inside the JWT:
+
+```text
+database role changes
+do not automatically update
+existing JWTs
+```
+
+A new token is needed after a role change.
+
+A stricter production system could use shorter-lived access tokens or query current User data during authorization.
+
+## Current RBAC Status
+
+```text
+Role added to JWT                 ✅
+Role added to req.user            ✅
+Auth middleware reads role        ✅
+authorize middleware created      ✅
+ADMIN-only User routes            ✅
+ADMIN login tested                ✅
+ADMIN access allowed              ✅
+Fresh bcrypt USER created         ✅
+USER login tested                 ✅
+USER blocked with 403             ✅
+```
+
+## Security Layers Now
+
+```text
+Layer 1
+bcrypt password hashing
+
+Layer 2
+JWT authentication
+
+Layer 3
+Order ownership checks
+
+Layer 4
+Role authorization
+```
+
+The backend can now answer:
+
+```text
+Who are you?
+Do you own this resource?
+Do you have the right role?
+```
+
+## Next Steps
+
+```text
+ADMIN-only Category create/update/delete
+ADMIN-only Product create/update/delete
+Public or authenticated Product/Category reads
+Role-aware Order administration
+Input validation
+Centralized error handling
+Stock validation
+Server-side totalPrice calculation
+```
+
+## Git Commit
+
+```bash
+git status
+git add .
+git commit -m "add role based authorization"
+git push
+```

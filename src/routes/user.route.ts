@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import { userService } from '../services/user/user.service.js';
+import { auth } from "../middleware/auth.middleware.js";
+import { authorize } from "../middleware/authorize.middleware.js";
 
 const router = Router();
 
-router.get('/', async (req, res) => {
+router.get('/', auth, authorize("ADMIN"), async (req, res) => {
     const users =  await userService.getAllUsers();
 
     res.json({
@@ -13,8 +15,8 @@ router.get('/', async (req, res) => {
     })
 })
 
-router.get('/:id', async (req, res) => {
-    const id = req.params.id;
+router.get('/:id', auth, authorize("ADMIN"), async (req, res) => {
+    const id = req.params.id as string;
     const user = await userService.getUserById(id);
 
     if (!user) {
@@ -30,7 +32,7 @@ router.get('/:id', async (req, res) => {
         data: user
     });
 })
-router.post('/', async (req, res) => {
+router.post('/', auth, authorize("ADMIN"), async (req, res) => {
     const data = req.body;
     const user = await userService.createUser(data);
    res.json({
@@ -41,8 +43,8 @@ router.post('/', async (req, res) => {
 });
 })
 
-router.patch('/:id', async (req, res) => {
-    const id = req.params.id;
+router.patch('/:id', auth, authorize("ADMIN"), async (req, res) => {
+    const id = req.params.id as string;
     const data = req.body;
     const user = await userService.updateUser(id, data);
 
@@ -53,8 +55,8 @@ router.patch('/:id', async (req, res) => {
     });
 })
 
-router.delete('/:id', async (req, res) => {
-    const id = req.params.id;
+router.delete('/:id', auth, authorize("ADMIN"), async (req, res) => {
+    const id = req.params.id as string;
     const user = await userService.deleteUser(id);
 
     res.json({

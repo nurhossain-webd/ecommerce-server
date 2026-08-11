@@ -21,10 +21,11 @@ export const auth = (
     const decoded = jwt.verify(
       token,
       process.env.JWT_SECRET as string
-    ) as { id: string };
+    ) as { id: string; role: "USER" | "ADMIN" };
 
     req.user = {
       id: decoded.id,
+        role: decoded.role,
     };
 
     next();

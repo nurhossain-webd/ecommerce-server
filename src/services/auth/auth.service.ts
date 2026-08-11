@@ -25,7 +25,7 @@ const loginUser = async (data: {
   if (!isPasswordMatched) {
     return null;
   }
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET as string, {
+    const token = jwt.sign({ id: user.id,role: user.role, }, process.env.JWT_SECRET as string, {
       expiresIn: "7d",
     });
 
