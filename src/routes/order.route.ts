@@ -1,5 +1,8 @@
 import { Router } from "express";
-import { orderService } from "../services/order/order.service.js";
+import {
+  OrderCreationError,
+  orderService,
+} from "../services/order/order.service.js";
 import { auth } from "../middleware/auth.middleware.js";
 
 const router = Router();
@@ -36,18 +39,27 @@ router.get("/:id", auth, async (req, res) => {
 });
 
 router.post("/", auth, async (req, res) => {
-  const data = req.body;
+  try {
+    const order = await orderService.createOrder({
+      userId: req.user!.id,
+      items: req.body.items,
+    });
 
-  const order = await orderService.createOrder({
-    ...data,
-    userId: req.user!.id,
-  });
+    res.json({
+      success: true,
+      message: "Order created successfully",
+      data: order,
+    });
+  } catch (error) {
+    if (error instanceof OrderCreationError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+      });
+    }
 
-  res.json({
-    success: true,
-    message: "Order created successfully",
-    data: order,
-  });
+    throw error;
+  }
 });
 router.patch("/:id", auth, async (req, res) => {
   const id = req.params.id as string;

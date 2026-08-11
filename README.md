@@ -6415,3 +6415,440 @@ Push the commit:
 ```bash
 git push
 ```
+
+---
+
+# Secure Order Pricing and Transactional Stock Updates
+
+This stage improves the existing authenticated Order creation flow.
+
+Previously, the frontend sent:
+
+```json
+{
+  "userId": "USER_UUID",
+  "totalPrice": 1,
+  "items": [
+    {
+      "productId": "PRODUCT_UUID",
+      "quantity": 2,
+      "price": 0.5
+    }
+  ]
+}
+```
+
+This was unsafe because a client could change:
+
+```text
+userId
+totalPrice
+items[].price
+```
+
+The backend must treat all client input as untrusted.
+
+---
+
+## New Order Request Body
+
+The frontend now sends only Product IDs and quantities:
+
+```json
+{
+  "items": [
+    {
+      "productId": "PRODUCT_UUID",
+      "quantity": 2
+    }
+  ]
+}
+```
+
+The frontend no longer decides:
+
+```text
+Order owner
+Product price
+Order total price
+Remaining stock
+```
+
+---
+
+## Get the User From the Verified JWT
+
+The Order route is still protected by:
+
+```ts
+auth
+```
+
+The route passes the authenticated User ID separately:
+
+```ts
+const order = await orderService.createOrder({
+  userId: req.user!.id,
+  items: req.body.items,
+});
+```
+
+The route does not use:
+
+```ts
+req.body.userId
+```
+
+Flow:
+
+```text
+JWT
+↓
+auth middleware
+↓
+req.user.id
+↓
+Order userId
+```
+
+---
+
+## Validate Order Items
+
+Before starting database work, the service checks:
+
+```text
+items is an array
+items is not empty
+productId is a valid UUID
+quantity is an integer
+quantity is greater than zero
+the same Product is not repeated
+```
+
+Examples of rejected quantities:
+
+```text
+0
+-1
+1.5
+```
+
+Invalid Order input returns a clean JSON error instead of creating an incomplete Order.
+
+---
+
+## Fetch Product Data From PostgreSQL
+
+The service fetches the requested Products with Prisma:
+
+```ts
+const products = await tx.product.findMany({
+  where: {
+    id: {
+      in: [...productIds],
+    },
+  },
+  select: {
+    id: true,
+    price: true,
+    stock: true,
+    status: true,
+    isDeleted: true,
+  },
+});
+```
+
+The database is now the trusted source for:
+
+```text
+Product price
+Product stock
+Product status
+Product soft-delete state
+```
+
+---
+
+## Reject Unavailable Products
+
+Order creation rejects a Product when:
+
+```text
+Product does not exist
+Product is soft deleted
+Product status is not ACTIVE
+Requested quantity exceeds stock
+```
+
+Responses use:
+
+```text
+404 → Product missing or deleted
+400 → Product inactive or invalid request
+409 → Insufficient stock
+```
+
+---
+
+## Use Database Product Prices
+
+Each OrderItem is built from the Product returned by Prisma:
+
+```ts
+return {
+  productId: product.id,
+  quantity: item.quantity,
+  price: product.price,
+};
+```
+
+Even if a malicious client sends:
+
+```json
+{
+  "price": 0.01
+}
+```
+
+that value is ignored.
+
+The saved OrderItem price always comes from:
+
+```text
+PostgreSQL Product.price
+```
+
+---
+
+## Calculate `totalPrice` on the Server
+
+The backend calculates the total:
+
+```ts
+const totalPrice = orderItems.reduce(
+  (total, item) => total + item.price * item.quantity,
+  0
+);
+```
+
+Formula:
+
+```text
+OrderItem total = database price × requested quantity
+
+Order totalPrice = sum of all OrderItem totals
+```
+
+The client cannot choose the final Order price.
+
+Order PATCH also no longer accepts `totalPrice`, so a client cannot change the calculated value afterward.
+
+---
+
+## Prevent Negative Stock
+
+Stock is reduced with a conditional Prisma update:
+
+```ts
+const stockUpdate = await tx.product.updateMany({
+  where: {
+    id: item.productId,
+    isDeleted: false,
+    status: "ACTIVE",
+    stock: {
+      gte: item.quantity,
+    },
+  },
+  data: {
+    stock: {
+      decrement: item.quantity,
+    },
+  },
+});
+```
+
+The important condition is:
+
+```ts
+stock: {
+  gte: item.quantity,
+}
+```
+
+Stock is decremented only when enough stock still exists.
+
+This protects against two requests trying to buy the final stock at the same time.
+
+If the conditional update changes zero rows:
+
+```ts
+if (stockUpdate.count !== 1) {
+  throw new OrderCreationError(
+    "Insufficient product stock",
+    409
+  );
+}
+```
+
+The transaction then rolls back.
+
+---
+
+## Prisma Transaction
+
+Product checks, stock reductions, Order creation, and nested OrderItem creation run inside:
+
+```ts
+prisma.$transaction(async (tx) => {
+  // Fetch Products
+  // Validate availability and stock
+  // Reduce stock
+  // Calculate totalPrice
+  // Create Order and OrderItems
+});
+```
+
+The transaction provides all-or-nothing behavior:
+
+```text
+Everything succeeds
+↓
+stock is reduced
+Order is created
+OrderItems are created
+```
+
+or:
+
+```text
+Any step fails
+↓
+all database changes roll back
+↓
+no partial Order
+no partial stock reduction
+```
+
+---
+
+## Preserve Nested OrderItem Creation
+
+The existing Prisma relation is preserved:
+
+```ts
+return tx.order.create({
+  data: {
+    userId: data.userId,
+    totalPrice,
+    orderItems: {
+      create: orderItems,
+    },
+  },
+  include: {
+    orderItems: {
+      include: {
+        product: true,
+      },
+    },
+  },
+});
+```
+
+The response still includes:
+
+```text
+Order
+↓
+OrderItems
+↓
+related Product data
+```
+
+---
+
+## Secure Order Creation Flow
+
+```text
+POST /api/orders
+↓
+auth verifies JWT
+↓
+userId comes from req.user.id
+↓
+validate items and quantities
+↓
+start Prisma transaction
+↓
+fetch Products from PostgreSQL
+↓
+reject missing/deleted/inactive Products
+↓
+check stock
+↓
+use database Product prices
+↓
+conditionally reduce stock
+↓
+calculate totalPrice on server
+↓
+create Order and nested OrderItems
+↓
+commit transaction
+```
+
+---
+
+## Current Secure Order Status
+
+```text
+POST Order requires authentication       ✅
+userId comes from verified JWT           ✅
+Client totalPrice is ignored             ✅
+Client OrderItem price is ignored        ✅
+Items array is validated                 ✅
+Quantities must be positive integers     ✅
+Duplicate Products are rejected          ✅
+Products are fetched with Prisma         ✅
+Missing Products are rejected            ✅
+Deleted Products are rejected            ✅
+Inactive Products are rejected           ✅
+Stock is checked                         ✅
+Database Product prices are used         ✅
+totalPrice is calculated on server       ✅
+Product stock is reduced                 ✅
+Negative stock is prevented              ✅
+Order creation uses a transaction        ✅
+Nested OrderItems are preserved          ✅
+```
+
+---
+
+## TypeScript and Prisma Checks
+
+The secure Order changes were checked with:
+
+```bash
+npm run typecheck
+npm run build
+npx prisma validate
+```
+
+Results:
+
+```text
+TypeScript typecheck passed ✅
+Production build passed     ✅
+Prisma schema valid         ✅
+```
+
+---
+
+## Git Commit and Push
+
+```bash
+git status
+git add README.md src/routes/order.route.ts src/services/order/order.service.ts
+git commit -m "secure order pricing and stock updates"
+git push
+```
