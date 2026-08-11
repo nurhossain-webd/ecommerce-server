@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import prisma from "../lib/prisma.js";
 
 export const auth = (
   req: Request,
@@ -30,8 +31,10 @@ export const auth = (
     return next(new Error("JWT_SECRET is not configured"));
   }
 
+  let decoded: jwt.JwtPayload | string;
+
   try {
-    const decoded = jwt.verify(token, jwtSecret);
+    decoded = jwt.verify(token, jwtSecret);
 
     if (
       typeof decoded === "string" ||
@@ -43,17 +46,34 @@ export const auth = (
         message: "Invalid authentication token",
       });
     }
-
-    req.user = {
-      id: decoded.id,
-      role: decoded.role,
-    };
-
-    next();
   } catch {
     return res.status(401).json({
       success: false,
       message: "Invalid or expired token",
     });
   }
+
+  prisma.user
+    .findFirst({
+      where: {
+        id: decoded.id,
+        isDeleted: false,
+      },
+      select: {
+        id: true,
+        role: true,
+      },
+    })
+    .then((user) => {
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          message: "User is no longer active",
+        });
+      }
+
+      req.user = user;
+      next();
+    })
+    .catch(next);
 };

@@ -33,6 +33,62 @@ const getAllOrders = async (userId: string) => {
   return orders;
 };
 
+const getAllOrdersForAdmin = async () => {
+  return prisma.order.findMany({
+    where: { isDeleted: false },
+    orderBy: { createdAt: "desc" },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+        },
+      },
+      orderItems: {
+        include: {
+          product: true,
+        },
+      },
+    },
+  });
+};
+
+const updateOrderStatusForAdmin = async (
+  id: string,
+  status: "PENDING" | "CONFIRMED" | "SHIPPED" | "DELIVERED" | "CANCELLED"
+) => {
+  const existingOrder = await prisma.order.findFirst({
+    where: { id, isDeleted: false },
+    select: { id: true },
+  });
+
+  if (!existingOrder) {
+    return null;
+  }
+
+  return prisma.order.update({
+    where: { id },
+    data: { status },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+        },
+      },
+      orderItems: {
+        include: {
+          product: true,
+        },
+      },
+    },
+  });
+};
+
 const getOrderById = async (id: string, userId: string) => {
   const order = await prisma.order.findUnique({
     where: {
@@ -227,6 +283,8 @@ const deleteOrder = async (id: string, userId: string) => {
 
 export const orderService = {
   getAllOrders,
+  getAllOrdersForAdmin,
+  updateOrderStatusForAdmin,
   getOrderById,
   createOrder,
   updateOrder,

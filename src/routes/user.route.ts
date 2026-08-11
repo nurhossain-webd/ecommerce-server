@@ -54,6 +54,13 @@ router.patch('/:id', auth, authorize("ADMIN"), validateRequest({ params: idParam
     const data = req.body;
     const user = await userService.updateUser(id, data);
 
+    if (!user) {
+        return res.status(404).json({
+            success: false,
+            message: "User not found"
+        });
+    }
+
     res.json({
         success: true,
         message: "User updated successfully",
@@ -64,6 +71,13 @@ router.patch('/:id', auth, authorize("ADMIN"), validateRequest({ params: idParam
 router.delete('/:id', auth, authorize("ADMIN"), validateRequest({ params: idParamsSchema }), async (req, res) => {
     const id = req.params.id as string;
     const user = await userService.deleteUser(id);
+
+    if (!user) {
+        return res.status(404).json({
+            success: false,
+            message: "User not found"
+        });
+    }
 
     res.json({
         success: true,

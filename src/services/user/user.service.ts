@@ -48,6 +48,15 @@ const updateUser = async (id: string, data:
          name?: string;
          email?: string;
          }) => {
+            const existingUser = await prisma.user.findFirst({
+              where: { id, isDeleted: false },
+              select: { id: true },
+            });
+
+            if (!existingUser) {
+              return null;
+            }
+
             const user = await prisma.user.update({
                 where: { id: id },
                 data: data,
@@ -59,6 +68,15 @@ const updateUser = async (id: string, data:
         };
 
 const deleteUser = async (id: string) => {
+  const existingUser = await prisma.user.findFirst({
+    where: { id, isDeleted: false },
+    select: { id: true },
+  });
+
+  if (!existingUser) {
+    return null;
+  }
+
   const user = await prisma.user.update({
     where: { id: id },
     data: { isDeleted: true },

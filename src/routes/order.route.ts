@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { orderService } from "../services/order/order.service.js";
 import { auth } from "../middleware/auth.middleware.js";
+import { authorize } from "../middleware/authorize.middleware.js";
 import { validateRequest } from "../middleware/validate.middleware.js";
 import { idParamsSchema } from "../validations/common.validation.js";
 import {
@@ -9,6 +10,33 @@ import {
 } from "../validations/order.validation.js";
 
 const router = Router();
+
+router.get("/admin/all", auth, authorize("ADMIN"), async (_req, res) => {
+  const orders = await orderService.getAllOrdersForAdmin();
+
+  res.json({
+    success: true,
+    message: "All orders retrieved successfully",
+    data: orders,
+  });
+});
+
+router.patch("/admin/:id/status", auth, authorize("ADMIN"), validateRequest({ params: idParamsSchema, body: updateOrderSchema }), async (req, res) => {
+  const order = await orderService.updateOrderStatusForAdmin(req.params.id as string, req.body.status);
+
+  if (!order) {
+    return res.status(404).json({
+      success: false,
+      message: "Order not found",
+    });
+  }
+
+  res.json({
+    success: true,
+    message: "Order status updated successfully",
+    data: order,
+  });
+});
 
 router.get("/", auth, async (req, res) => {
     const userId = req.user!.id;
