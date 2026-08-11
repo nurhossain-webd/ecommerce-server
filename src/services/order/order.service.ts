@@ -1,9 +1,10 @@
 import prisma from "../../lib/prisma.js";
 
-const getAllOrders = async () => {
+const getAllOrders = async (userId: string) => {
   const orders = await prisma.order.findMany({
     where: {
       isDeleted: false,
+        userId: userId,
     },
     include: {
       user: true,
@@ -18,11 +19,12 @@ const getAllOrders = async () => {
   return orders;
 };
 
-const getOrderById = async (id: string) => {
+const getOrderById = async (id: string, userId: string) => {
   const order = await prisma.order.findUnique({
     where: {
       id,
       isDeleted: false,
+      userId: userId,
     },
     include: {
       user: true,

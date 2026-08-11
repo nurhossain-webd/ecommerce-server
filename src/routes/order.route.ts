@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { orderService } from "../services/order/order.service.js";
+import { auth } from "../middleware/auth.middleware.js";
 
 const router = Router();
 
-router.get("/", async (_req, res) => {
-  const orders = await orderService.getAllOrders();
+router.get("/", auth, async (req, res) => {
+    const userId = req.user!.id;
+  const orders = await orderService.getAllOrders(userId);
 
   res.json({
     success: true,
@@ -13,10 +15,11 @@ router.get("/", async (_req, res) => {
   });
 });
 
-router.get("/:id", async (req, res) => {
-  const id = req.params.id;
+router.get("/:id", auth, async (req, res) => {
+    const userId = req.user!.id;
+  const id = req.params.id as string;
 
-  const order = await orderService.getOrderById(id);
+  const order = await orderService.getOrderById(id, userId);
 
   if (!order) {
     return res.status(404).json({
@@ -32,10 +35,13 @@ router.get("/:id", async (req, res) => {
   });
 });
 
-router.post("/", async (req, res) => {
+router.post("/", auth, async (req, res) => {
   const data = req.body;
 
-  const order = await orderService.createOrder(data);
+  const order = await orderService.createOrder({
+    ...data,
+    userId: req.user!.id,
+  });
 
   res.json({
     success: true,
@@ -43,9 +49,8 @@ router.post("/", async (req, res) => {
     data: order,
   });
 });
-
-router.patch("/:id", async (req, res) => {
-  const id = req.params.id;
+router.patch("/:id", auth, async (req, res) => {
+  const id = req.params.id as string;
   const data = req.body;
 
   const order = await orderService.updateOrder(id, data);
@@ -57,8 +62,8 @@ router.patch("/:id", async (req, res) => {
   });
 });
 
-router.delete("/:id", async (req, res) => {
-  const id = req.params.id;
+router.delete("/:id", auth, async (req, res) => {
+  const id = req.params.id as string;
 
   const order = await orderService.deleteOrder(id);
 

@@ -3741,3 +3741,988 @@ git add .
 git commit -m "add order CRUD with nested order items"
 git push
 ```
+
+# Authentication, JWT, Protected Routes, and Order Ownership
+
+This section documents the authentication/security work in detail, including the problems encountered and why each new line was added.
+
+## 1. Install Authentication Packages
+
+```bash
+npm install bcrypt jsonwebtoken
+npm install -D @types/bcrypt @types/jsonwebtoken
+```
+
+`bcrypt` hashes and compares passwords. `jsonwebtoken` creates and verifies JWTs. The `@types/...` packages give TypeScript type information for packages that do not provide their own types.
+
+## 2. Hash Passwords Before Saving
+
+User creation was changed from storing plain text to:
+
+```ts
+const hashedPassword = await bcrypt.hash(data.password, 10);
+```
+
+Here:
+
+```text
+data.password → plain password from request
+bcrypt.hash() → creates a secure hash
+10            → bcrypt cost/salt rounds
+hashedPassword → value stored in PostgreSQL
+```
+
+Then:
+
+```ts
+const user = await prisma.user.create({
+  data: {
+    name: data.name,
+    email: data.email,
+    password: hashedPassword,
+  },
+  omit: {
+    password: true,
+  },
+});
+```
+
+`omit: { password: true }` does not delete the password from PostgreSQL. It only prevents Prisma from returning it in the API result.
+
+The same `omit` was added to normal User CRUD queries so password hashes are not exposed.
+
+## 3. Login With `bcrypt.compare()`
+
+Created:
+
+```text
+src/services/auth/auth.service.ts
+```
+
+The important comparison is:
+
+```ts
+const isPasswordMatched = await bcrypt.compare(data.password, user.password);
+```
+
+`data.password` comes from the current login request.
+
+`user.password` comes from PostgreSQL and contains the stored bcrypt hash.
+
+Flow:
+
+```text
+plain password from login
+        ↓
+bcrypt.compare()
+        ↑
+stored bcrypt hash
+        ↓
+true / false
+```
+
+### Problem: old user could not login
+
+An older test User had been created before bcrypt was added, so PostgreSQL contained:
+
+```text
+123456
+```
+
+instead of a bcrypt hash such as:
+
+```text
+$2b$10$...
+```
+
+`bcrypt.compare()` therefore failed.
+
+Fix: create a new User after bcrypt hashing was enabled.
+
+## 4. Authentication Route Structure
+
+Connected:
+
+```ts
+app.use("/api/auth", authRouter);
+```
+
+Inside `auth.route.ts`:
+
+```ts
+router.post("/login", ...)
+```
+
+Express combines:
+
+```text
+/api/auth + /login
+=
+/api/auth/login
+```
+
+We use `/login` instead of only `/` because `/api/auth` is a base path that can later contain multiple authentication actions:
+
+```text
+/api/auth/login
+/api/auth/register
+/api/auth/logout
+/api/auth/refresh-token
+```
+
+## 5. JWT Secret
+
+Generated a random JWT secret:
+
+```bash
+openssl rand -base64 32
+```
+
+Then added it to `.env`:
+
+```env
+JWT_SECRET="..."
+```
+
+The secret stays only on the backend and must never be sent to the frontend.
+
+### Problem: `secretOrPrivateKey must have a value`
+
+JWT creation initially failed with:
+
+```text
+secretOrPrivateKey must have a value
+```
+
+because:
+
+```ts
+process.env.JWT_SECRET;
+```
+
+was undefined.
+
+Fix: add `JWT_SECRET` to `.env` and restart the server.
+
+Important:
+
+```ts
+process.env.JWT_SECRET as string;
+```
+
+does not create the environment variable. It only tells TypeScript to treat the value as a string.
+
+## 6. Create JWT
+
+After successful password comparison:
+
+```ts
+const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET as string, {
+  expiresIn: "7d",
+});
+```
+
+Line by line:
+
+```ts
+jwt.sign(...)
+```
+
+creates and signs the token.
+
+```ts
+{
+  id: user.id;
+}
+```
+
+is the payload. We chose to store the User ID in the JWT.
+
+```ts
+process.env.JWT_SECRET as string;
+```
+
+is the private server secret used to sign it.
+
+```ts
+expiresIn: "7d";
+```
+
+makes the token expire after seven days.
+
+Password is NOT placed inside the JWT.
+
+## 7. Return Safe User Data + JWT
+
+Instead of:
+
+```ts
+return { user, token };
+```
+
+which could return the stored password hash, return a safe user object:
+
+```ts
+return {
+  user: {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+  },
+  token,
+};
+```
+
+## 8. JWT Authentication Flow
+
+```text
+User sends email + password
+        ↓
+Find User by email
+        ↓
+bcrypt.compare()
+        ↓
+Password valid
+        ↓
+jwt.sign()
+        ↓
+Frontend receives JWT
+        ↓
+Frontend sends JWT on protected requests
+```
+
+The frontend sends:
+
+```text
+Authorization: Bearer JWT_TOKEN
+```
+
+## 9. Why JWT Is Safer Than Trusting `req.body.userId`
+
+Before authentication, Order creation could trust:
+
+```json
+{
+  "userId": "USER_UUID"
+}
+```
+
+But a User ID is only an identifier. It is not proof that the requester owns that identity.
+
+After JWT authentication, the backend should get the authenticated User ID from the verified token instead of trusting:
+
+```ts
+req.body.userId;
+```
+
+## 10. Authentication Middleware
+
+Created:
+
+```text
+src/middleware/auth.middleware.ts
+```
+
+```ts
+import { NextFunction, Request, Response } from "express";
+import jwt from "jsonwebtoken";
+
+export const auth = (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized",
+    });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as {
+      id: string;
+    };
+
+    req.user = {
+      id: decoded.id,
+    };
+
+    next();
+  } catch {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired token",
+    });
+  }
+};
+```
+
+## 11. `req.headers.authorization`
+
+If the client sends:
+
+```text
+Authorization: Bearer eyJhbGciOi...
+```
+
+then:
+
+```ts
+req.headers.authorization;
+```
+
+contains:
+
+```text
+Bearer eyJhbGciOi...
+```
+
+## 12. `authHeader.split(" ")[1]`
+
+```ts
+authHeader.split(" ");
+```
+
+turns:
+
+```text
+Bearer eyJ...
+```
+
+into:
+
+```ts
+["Bearer", "eyJ..."];
+```
+
+So:
+
+```ts
+authHeader.split(" ")[1];
+```
+
+returns only the JWT.
+
+## 13. `jwt.verify()`
+
+```ts
+const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as {
+  id: string;
+};
+```
+
+This verifies the token using the same secret used during `jwt.sign()`.
+
+It checks whether the token is valid and unexpired.
+
+Because we signed with:
+
+```ts
+{
+  id: user.id;
+}
+```
+
+we later read:
+
+```ts
+decoded.id;
+```
+
+The name `decoded` is just our variable name and can be changed.
+
+The payload property `id` can also be renamed, but whatever name is used in `jwt.sign()` must match what is read after `jwt.verify()`.
+
+## 14. Extend Express Request With `req.user`
+
+Express knows properties such as:
+
+```text
+req.body
+req.params
+req.headers
+```
+
+but does not know `req.user`.
+
+Created:
+
+```text
+src/types/express.d.ts
+```
+
+```ts
+import "express";
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: {
+        id: string;
+      };
+    }
+  }
+}
+```
+
+This only tells TypeScript that `req.user` is allowed.
+
+It does NOT create the runtime value.
+
+The middleware creates it:
+
+```ts
+req.user = {
+  id: decoded.id,
+};
+```
+
+Then `next()` passes the same request object to the route.
+
+## 15. Understanding `next()`
+
+For:
+
+```ts
+router.post("/", auth, async (req, res) => {
+```
+
+Express runs:
+
+```text
+request
+↓
+auth middleware
+↓
+JWT valid
+↓
+req.user created
+↓
+next()
+↓
+actual route handler
+```
+
+Without `next()`, the request would stop in the middleware.
+
+## 16. Protect Create Order
+
+Changed:
+
+```ts
+router.post("/", async ...)
+```
+
+to:
+
+```ts
+router.post("/", auth, async ...)
+```
+
+Adding `auth` means the route will not run unless JWT verification succeeds.
+
+## 17. Problem: `userId: undefined`
+
+After protecting Order creation, Prisma returned an error showing:
+
+```text
+userId: undefined
+Argument `user` is missing
+```
+
+Why?
+
+The frontend no longer sent `userId`, which was correct, but the route still did:
+
+```ts
+const data = req.body;
+const order = await orderService.createOrder(data);
+```
+
+So the service never received the authenticated User ID.
+
+Fix:
+
+```ts
+const order = await orderService.createOrder({
+  ...data,
+  userId: req.user!.id,
+});
+```
+
+## 18. Understanding `...data`
+
+If:
+
+```ts
+data;
+```
+
+contains:
+
+```json
+{
+  "totalPrice": 999,
+  "items": [...]
+}
+```
+
+then:
+
+```ts
+{
+  ...data,
+  userId: req.user!.id,
+}
+```
+
+creates:
+
+```json
+{
+  "totalPrice": 999,
+  "items": [...],
+  "userId": "AUTHENTICATED_USER_ID"
+}
+```
+
+`...data` copies the properties from the original object.
+
+Then `userId` is added from the verified JWT.
+
+## 19. Understanding `req.user!.id`
+
+The custom Request type used:
+
+```ts
+user?: {
+  id: string;
+}
+```
+
+The `?` means `user` might be undefined.
+
+TypeScript may therefore reject:
+
+```ts
+req.user.id;
+```
+
+The route runs after `auth`, which sets `req.user`, so we use:
+
+```ts
+req.user!.id;
+```
+
+The `!` is TypeScript's non-null assertion operator.
+
+It means:
+
+```text
+I know this value exists here.
+```
+
+It does not create or validate the value at runtime.
+
+## 20. Successful Protected Order Creation
+
+After fixing the route:
+
+```text
+JWT
+↓
+auth middleware
+↓
+decoded.id
+↓
+req.user.id
+↓
+Order route adds userId
+↓
+createOrder()
+↓
+Order.userId
+```
+
+Order creation worked without sending `userId` from the frontend.
+
+## 21. Problem: `jwt malformed`
+
+During testing we received:
+
+```text
+JsonWebTokenError: jwt malformed
+```
+
+This happened because the value sent after `Bearer` was not a complete valid JWT.
+
+A JWT normally has three sections:
+
+```text
+xxxxx.yyyyy.zzzzz
+```
+
+Fix: login again, copy the full token, and send:
+
+```text
+Authorization: Bearer FULL_JWT_TOKEN
+```
+
+## 22. Why Add `try/catch` Around `jwt.verify()`
+
+Without `try/catch`, malformed or expired tokens caused Express to return an HTML error page.
+
+Now:
+
+```ts
+try {
+  // verify
+} catch {
+  return res.status(401).json({
+    success: false,
+    message: "Invalid or expired token",
+  });
+}
+```
+
+This keeps API error responses consistent JSON.
+
+## 23. Protect All Order Routes
+
+Added `auth` to:
+
+```ts
+router.get("/", auth, ...)
+router.get("/:id", auth, ...)
+router.post("/", auth, ...)
+router.patch("/:id", auth, ...)
+router.delete("/:id", auth, ...)
+```
+
+Why?
+
+Order data should not be publicly available.
+
+Adding `auth` checks:
+
+```text
+Is this requester authenticated?
+```
+
+But authentication alone does NOT check whether the User owns a specific Order.
+
+That requires ownership filtering.
+
+## 24. Problem: `req.params.id` Type Error
+
+TypeScript showed:
+
+```text
+Argument of type 'string | string[]'
+is not assignable to parameter of type 'string'.
+```
+
+The newer Express typings can type:
+
+```ts
+req.params.id;
+```
+
+as:
+
+```ts
+string | string[]
+```
+
+but our service expects:
+
+```ts
+id: string;
+```
+
+Fix:
+
+```ts
+const id = req.params.id as string;
+```
+
+This tells TypeScript that this route parameter is one string.
+
+## 25. Protect GET All Orders With Ownership
+
+Previously:
+
+```ts
+getAllOrders();
+```
+
+could return every active Order.
+
+Changed service:
+
+```ts
+const getAllOrders = async (userId: string) => {
+  const orders = await prisma.order.findMany({
+    where: {
+      userId: userId,
+      isDeleted: false,
+    },
+    include: {
+      user: true,
+      orderItems: {
+        include: {
+          product: true,
+        },
+      },
+    },
+  });
+
+  return orders;
+};
+```
+
+Changed route:
+
+```ts
+router.get("/", auth, async (req, res) => {
+  const userId = req.user!.id;
+
+  const orders = await orderService.getAllOrders(userId);
+
+  res.json({
+    success: true,
+    message: "Orders retrieved successfully",
+    data: orders,
+  });
+});
+```
+
+Now:
+
+```text
+JWT
+↓
+req.user.id
+↓
+getAllOrders(userId)
+↓
+where userId matches authenticated User
+```
+
+So one User does not receive another User's Orders.
+
+## 26. Protect GET Order By ID With Ownership
+
+Changed service:
+
+```ts
+const getOrderById = async (id: string, userId: string) => {
+  const order = await prisma.order.findFirst({
+    where: {
+      id,
+      userId,
+      isDeleted: false,
+    },
+    include: {
+      user: true,
+      orderItems: {
+        include: {
+          product: true,
+        },
+      },
+    },
+  });
+
+  return order;
+};
+```
+
+Changed route:
+
+```ts
+router.get("/:id", auth, async (req, res) => {
+  const id = req.params.id as string;
+  const userId = req.user!.id;
+
+  const order = await orderService.getOrderById(id, userId);
+
+  if (!order) {
+    return res.status(404).json({
+      success: false,
+      message: "Order not found",
+    });
+  }
+
+  res.json({
+    success: true,
+    message: "Order retrieved successfully",
+    data: order,
+  });
+});
+```
+
+Prisma now checks:
+
+```ts
+where: {
+  id,
+  userId,
+  isDeleted: false,
+}
+```
+
+Meaning:
+
+```text
+Correct Order ID?
+AND
+Does this Order belong to authenticated User?
+AND
+Is it not soft deleted?
+```
+
+## 27. Authentication vs Authorization
+
+Authentication asks:
+
+```text
+Who are you?
+```
+
+Handled by:
+
+```text
+JWT
+jwt.verify()
+auth middleware
+```
+
+Authorization / ownership asks:
+
+```text
+Are you allowed to access this resource?
+```
+
+Handled by checks such as:
+
+```ts
+where: {
+  id,
+  userId,
+}
+```
+
+A valid JWT does not automatically mean the User should be allowed to access every Order.
+
+## 28. Current Protected Order Flow
+
+Create Order:
+
+```text
+Frontend
+↓
+Authorization: Bearer JWT
+↓
+auth middleware
+↓
+jwt.verify()
+↓
+req.user.id
+↓
+Order route
+↓
+userId added from JWT
+↓
+createOrder()
+↓
+PostgreSQL
+```
+
+Get own Orders:
+
+```text
+JWT
+↓
+req.user.id
+↓
+getAllOrders(userId)
+↓
+where userId matches
+↓
+only own Orders
+```
+
+Get own Order by ID:
+
+```text
+JWT userId
++
+Order ID from URL
+↓
+where:
+id
+userId
+isDeleted = false
+↓
+return only if owned by authenticated User
+```
+
+## 29. Security Lessons
+
+```text
+Never store plain-text passwords.
+Never return password hashes to the frontend.
+Never put passwords inside JWT payloads.
+JWT_SECRET stays only on the backend.
+Do not trust req.body.userId for authenticated identity.
+Use User ID from verified JWT.
+Authentication and ownership are different.
+A valid JWT does not mean access to every resource.
+Catch JWT errors and return JSON.
+```
+
+## 30. Current Authentication Status
+
+```text
+bcrypt hashing                       ✅
+Password omitted from User responses ✅
+Login service                         ✅
+bcrypt.compare()                      ✅
+JWT secret                            ✅
+JWT generation                        ✅
+Login route                           ✅
+Auth middleware                       ✅
+Authorization header parsing          ✅
+jwt.verify()                          ✅
+Custom req.user type                  ✅
+User ID from JWT                      ✅
+Invalid JWT handling                  ✅
+Create Order protected                ✅
+All Order routes protected            ✅
+Get own Orders                        ✅
+Get own Order by ID                   ✅
+```
+
+## 31. Next Security Work
+
+Still to do:
+
+```text
+Protect Update Order by ownership
+Protect Delete Order by ownership
+Role-based authorization (USER / ADMIN)
+Input validation
+Centralized error handling
+Calculate trusted Order total on backend
+```
+
+## Git Checkpoint
+
+```bash
+git status
+git add .
+git commit -m "add JWT authentication and protect order routes"
+git push
+```
