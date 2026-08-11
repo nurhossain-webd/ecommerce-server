@@ -2945,3 +2945,799 @@ git add .
 git commit -m "add review model service and routes"
 git push
 ```
+
+## Get Review By ID
+
+Added a service to retrieve one active review by ID together with its related Product and User.
+
+```ts
+const getReviewById = async (id: string) => {
+  const review = await prisma.review.findUnique({
+    where: {
+      id: id,
+      isDeleted: false,
+    },
+    include: {
+      product: true,
+      user: true,
+    },
+  });
+
+  return review;
+};
+```
+
+Added route:
+
+```text
+GET /api/reviews/:id
+```
+
+If the review is missing or soft deleted, the API returns `Review not found`.
+
+## Update Review
+
+Added:
+
+```ts
+const updateReview = async (
+  id: string,
+  data: {
+    rating?: number;
+    comment?: string;
+  },
+) => {
+  const review = await prisma.review.update({
+    where: { id },
+    data,
+  });
+
+  return review;
+};
+```
+
+Added route:
+
+```text
+PATCH /api/reviews/:id
+```
+
+Test:
+
+```bash
+curl -X PATCH http://localhost:5001/api/reviews/YOUR_REVIEW_ID \
+  -H "Content-Type: application/json" \
+  -d '{"rating":4,"comment":"Very good product"}'
+```
+
+## Soft Delete Review
+
+Added:
+
+```ts
+const deleteReview = async (id: string) => {
+  const review = await prisma.review.update({
+    where: { id },
+    data: {
+      isDeleted: true,
+    },
+  });
+
+  return review;
+};
+```
+
+Added route:
+
+```text
+DELETE /api/reviews/:id
+```
+
+Test:
+
+```bash
+curl -X DELETE http://localhost:5001/api/reviews/YOUR_REVIEW_ID
+```
+
+## Review CRUD Status
+
+```text
+GET    /api/reviews       → Get all active reviews
+GET    /api/reviews/:id   → Get active review by ID
+POST   /api/reviews       → Create review
+PATCH  /api/reviews/:id   → Update review
+DELETE /api/reviews/:id   → Soft delete review
+```
+
+Review CRUD is now complete and tested.
+
+## Git Checkpoint
+
+```bash
+git status
+git add .
+git commit -m "complete review CRUD"
+git push
+```
+
+# Order, OrderItem, Relations, Nested Include, and Nested Create
+
+This section is intentionally more detailed because Order introduces several important Prisma relationship concepts.
+
+## Why We Need Both `Order` and `OrderItem`
+
+An Order can contain multiple products, so we cannot store only one `productId` inside `Order`.
+
+```text
+Order
+  ↓
+has many
+  ↓
+OrderItem
+  ↓
+each OrderItem points to one Product
+```
+
+`OrderItem` stores information for each product inside an order, such as:
+
+```text
+quantity
+price
+productId
+orderId
+```
+
+## Order Model Relations
+
+```prisma
+userId String @db.Uuid
+user   User   @relation(fields: [userId], references: [id])
+
+orderItems OrderItem[]
+```
+
+`userId` stores the User ID.
+
+```prisma
+user User @relation(fields: [userId], references: [id])
+```
+
+means:
+
+```text
+Order.userId
+      ↓
+references
+      ↓
+User.id
+```
+
+`orderItems OrderItem[]` means one Order can have many OrderItems.
+
+## OrderItem Model Relations
+
+```prisma
+orderId String @db.Uuid
+order   Order  @relation(fields: [orderId], references: [id])
+
+productId String  @db.Uuid
+product   Product @relation(fields: [productId], references: [id])
+```
+
+This means:
+
+```text
+OrderItem.orderId   → Order.id
+OrderItem.productId → Product.id
+```
+
+Added opposite fields:
+
+```prisma
+// User
+orders Order[]
+
+// Product
+orderItems OrderItem[]
+```
+
+## Migration
+
+```bash
+npx prisma migrate dev --name create_order_tables
+npx prisma generate
+```
+
+This creates:
+
+```text
+orders
+order_items
+```
+
+and foreign-key relationships.
+
+## Get All Orders
+
+```ts
+const getAllOrders = async () => {
+  const orders = await prisma.order.findMany({
+    where: {
+      isDeleted: false,
+    },
+    include: {
+      user: true,
+      orderItems: {
+        include: {
+          product: true,
+        },
+      },
+    },
+  });
+
+  return orders;
+};
+```
+
+### Understanding `include`
+
+```ts
+include: {
+```
+
+`include` is Prisma syntax used when we want related model data in the returned result.
+
+Without `include`, Prisma returns only fields directly from `Order`.
+
+### `user: true`
+
+```ts
+user: true,
+```
+
+`user` is the relation field defined in the `Order` model.
+
+This means:
+
+```text
+Also fetch the User connected to this Order.
+```
+
+So instead of receiving only:
+
+```json
+{
+  "userId": "USER_UUID"
+}
+```
+
+we can also receive:
+
+```json
+{
+  "userId": "USER_UUID",
+  "user": {
+    "id": "USER_UUID",
+    "name": "Riyad"
+  }
+}
+```
+
+### `orderItems`
+
+```ts
+orderItems: {
+```
+
+`orderItems` is the relation field:
+
+```prisma
+orderItems OrderItem[]
+```
+
+This tells Prisma to work with all OrderItems connected to the Order.
+
+If we only wanted OrderItems, we could write:
+
+```ts
+include: {
+  orderItems: true,
+}
+```
+
+### Nested `include`
+
+```ts
+orderItems: {
+  include: {
+    product: true,
+  },
+},
+```
+
+Read it like this:
+
+```text
+Include OrderItems
+        ↓
+For each OrderItem
+        ↓
+also include its Product
+```
+
+`product` matches this relation field in `OrderItem`:
+
+```prisma
+product Product @relation(...)
+```
+
+So the returned structure becomes:
+
+```text
+Order
+├── User
+└── OrderItems
+    ├── OrderItem 1
+    │   └── Product
+    └── OrderItem 2
+        └── Product
+```
+
+This is called a nested include because an `include` is used inside another related object.
+
+## Get Order By ID
+
+```ts
+const getOrderById = async (id: string) => {
+  const order = await prisma.order.findUnique({
+    where: {
+      id,
+      isDeleted: false,
+    },
+    include: {
+      user: true,
+      orderItems: {
+        include: {
+          product: true,
+        },
+      },
+    },
+  });
+
+  return order;
+};
+```
+
+Remember:
+
+```text
+where
+↓
+Which Order should Prisma find?
+
+include
+↓
+What related information should Prisma also return?
+```
+
+## Create Order With OrderItems
+
+```ts
+const createOrder = async (data: {
+  userId: string;
+  totalPrice: number;
+  items: {
+    productId: string;
+    quantity: number;
+    price: number;
+  }[];
+}) => {
+  const order = await prisma.order.create({
+    data: {
+      userId: data.userId,
+      totalPrice: data.totalPrice,
+
+      orderItems: {
+        create: data.items,
+      },
+    },
+
+    include: {
+      orderItems: {
+        include: {
+          product: true,
+        },
+      },
+    },
+  });
+
+  return order;
+};
+```
+
+### Understanding `items`
+
+```ts
+items: {
+  productId: string;
+  quantity: number;
+  price: number;
+}
+[];
+```
+
+The `[]` means `items` is an array.
+
+Each item represents one OrderItem.
+
+Example:
+
+```json
+{
+  "items": [
+    {
+      "productId": "PRODUCT_1",
+      "quantity": 2,
+      "price": 999
+    },
+    {
+      "productId": "PRODUCT_2",
+      "quantity": 1,
+      "price": 100
+    }
+  ]
+}
+```
+
+This creates two OrderItems.
+
+### `userId: data.userId`
+
+```ts
+userId: data.userId,
+```
+
+The first `userId` is the field Prisma expects for the new Order.
+
+`data.userId` is the value received from the request.
+
+### `totalPrice: data.totalPrice`
+
+```ts
+totalPrice: data.totalPrice,
+```
+
+stores the provided total price in the new Order.
+
+Later, a stronger production implementation should calculate this on the backend rather than fully trusting the frontend.
+
+## Nested Create
+
+The most important new part:
+
+```ts
+orderItems: {
+  create: data.items,
+},
+```
+
+This is a Prisma nested create.
+
+`orderItems` is the relation field from:
+
+```prisma
+orderItems OrderItem[]
+```
+
+`create` means:
+
+```text
+While creating this Order,
+also create related OrderItem records.
+```
+
+`data.items` contains the OrderItem objects from the request.
+
+So:
+
+```text
+Create Order
+    ↓
+Take every object from data.items
+    ↓
+Create an OrderItem for each
+    ↓
+Connect each OrderItem to the new Order
+```
+
+## How `orderId` Gets Filled Automatically
+
+The request does not contain `orderId`, even though `OrderItem` requires it.
+
+That works because this is a nested create:
+
+```ts
+orderItems: {
+  create: data.items,
+}
+```
+
+Prisma already knows these OrderItems belong to the Order it is currently creating.
+
+Conceptually:
+
+```text
+1. Prisma creates Order
+
+Order.id = "ORDER-123"
+
+2. Prisma creates OrderItems
+
+OrderItem 1.orderId = "ORDER-123"
+OrderItem 2.orderId = "ORDER-123"
+```
+
+So we do not manually send `orderId`.
+
+## Why Include After Create?
+
+This part:
+
+```ts
+include: {
+  orderItems: {
+    include: {
+      product: true,
+    },
+  },
+},
+```
+
+does not create anything.
+
+The creation already happened here:
+
+```ts
+orderItems: {
+  create: data.items,
+}
+```
+
+The `include` only controls what Prisma returns after the database operation.
+
+Remember:
+
+```text
+create
+↓
+changes database
+
+include
+↓
+controls related data returned
+```
+
+## Why Update Does Not Need `include`
+
+```ts
+const updateOrder = async (
+  id: string,
+  data: {
+    status?: "PENDING" | "CONFIRMED" | "SHIPPED" | "DELIVERED" | "CANCELLED";
+    totalPrice?: number;
+  },
+) => {
+  const order = await prisma.order.update({
+    where: {
+      id,
+    },
+    data,
+  });
+
+  return order;
+};
+```
+
+We are only updating Order fields.
+
+For example:
+
+```json
+{
+  "status": "CONFIRMED"
+}
+```
+
+We do not need User, OrderItem, or Product details to perform that update.
+
+If the frontend needed the full related data immediately after updating, we could add `include`, but it is not required for the update itself.
+
+## Why Soft Delete Does Not Need `include`
+
+```ts
+const deleteOrder = async (id: string) => {
+  const order = await prisma.order.update({
+    where: {
+      id,
+    },
+    data: {
+      isDeleted: true,
+    },
+  });
+
+  return order;
+};
+```
+
+This only needs to:
+
+```text
+Find Order
+↓
+set isDeleted = true
+```
+
+Related information is not needed for that operation.
+
+Important:
+
+```text
+include does NOT create or define a relation.
+```
+
+The relation already exists through `@relation`.
+
+`include` only asks Prisma to return related records.
+
+## Quick `include` Rule
+
+```ts
+include: {
+  user: true,
+}
+```
+
+means:
+
+```text
+Order + User
+```
+
+```ts
+include: {
+  orderItems: true,
+}
+```
+
+means:
+
+```text
+Order + OrderItems
+```
+
+```ts
+include: {
+  orderItems: {
+    include: {
+      product: true,
+    },
+  },
+}
+```
+
+means:
+
+```text
+Order
++
+OrderItems
++
+Product for each OrderItem
+```
+
+## Order Router
+
+Connected with:
+
+```ts
+app.use("/api/orders", orderRouter);
+```
+
+Endpoints:
+
+```text
+GET    /api/orders
+GET    /api/orders/:id
+POST   /api/orders
+PATCH  /api/orders/:id
+DELETE /api/orders/:id
+```
+
+## Create Order Test
+
+```bash
+curl -X POST http://localhost:5001/api/orders   -H "Content-Type: application/json"   -d '{
+    "userId": "YOUR_USER_ID",
+    "totalPrice": 1998,
+    "items": [
+      {
+        "productId": "YOUR_PRODUCT_ID",
+        "quantity": 2,
+        "price": 999
+      }
+    ]
+  }'
+```
+
+## Update Order Test
+
+```bash
+curl -X PATCH http://localhost:5001/api/orders/YOUR_ORDER_ID   -H "Content-Type: application/json"   -d '{
+    "status": "CONFIRMED"
+  }'
+```
+
+## Soft Delete Order Test
+
+```bash
+curl -X DELETE http://localhost:5001/api/orders/YOUR_ORDER_ID
+```
+
+After soft delete, `GET /api/orders` returned:
+
+```json
+{
+  "success": true,
+  "message": "Orders retrieved successfully",
+  "data": []
+}
+```
+
+This is correct because `getAllOrders()` uses:
+
+```ts
+where: {
+  isDeleted: false,
+}
+```
+
+The deleted Order remains in PostgreSQL but is hidden from normal API results.
+
+## Important Concepts Learned
+
+```text
+OrderItem as a connecting model
+Foreign keys
+One-to-many relations
+Nested include
+Nested create
+Automatic orderId assignment
+include vs create
+where vs include
+Soft delete
+```
+
+Most important summary:
+
+```text
+@relation
+→ defines how models are connected
+
+include
+→ returns related data
+
+create inside a relation
+→ creates related records
+
+where
+→ chooses which record(s) to work with
+```
+
+## Git Checkpoint
+
+```bash
+git status
+git add .
+git commit -m "add order CRUD with nested order items"
+git push
+```

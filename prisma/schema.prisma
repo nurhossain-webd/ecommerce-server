@@ -23,6 +23,7 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   reviews   Review[]
+  orders    Order[]
 
   @@map("users")
 }
@@ -64,6 +65,7 @@ model Product {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   reviews   Review[]
+  orderItems OrderItem[]
 
   @@index([categoryId])
   @@map("products")
@@ -86,4 +88,45 @@ model Review {
   @@index([userId])
   @@index([productId])
   @@map("reviews")
+}
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+model Order {
+  id         String      @id @default(uuid()) @db.Uuid
+  status     OrderStatus @default(PENDING)
+  totalPrice Float
+  isDeleted  Boolean     @default(false)
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id])
+
+  orderItems OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id       String @id @default(uuid()) @db.Uuid
+  quantity Int
+  price    Float
+
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
 }
