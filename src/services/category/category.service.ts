@@ -10,7 +10,10 @@ const getAllCategories = async () => {
     return categories;
 };
 
-const createCategory = async (data: {name: string}) => {
+const createCategory = async (data: {
+    name: string;
+    status?: "ACTIVE" | "INACTIVE";
+}) => {
     const category = await prisma.category.create({
         data: data,
     });

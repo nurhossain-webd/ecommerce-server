@@ -2,6 +2,12 @@ import { Router } from 'express';
 import { categoryService } from '../services/category/category.service.js';
 import { auth } from "../middleware/auth.middleware.js";
 import { authorize } from "../middleware/authorize.middleware.js";
+import { validateRequest } from "../middleware/validate.middleware.js";
+import { idParamsSchema } from "../validations/common.validation.js";
+import {
+    createCategorySchema,
+    updateCategorySchema,
+} from "../validations/category.validation.js";
 
 const router = Router();
 
@@ -14,7 +20,7 @@ res.json({
 });
 });
 
-router.get('/:id', async (req, res) => {
+router.get('/:id', validateRequest({ params: idParamsSchema }), async (req, res) => {
     const id = req.params.id as string;
     const category = await categoryService.getCategoryById(id);
 
@@ -32,7 +38,7 @@ router.get('/:id', async (req, res) => {
     });
 });
 
-router.post('/', auth, authorize("ADMIN"), async (req, res) => {
+router.post('/', auth, authorize("ADMIN"), validateRequest({ body: createCategorySchema }), async (req, res) => {
     const data = req.body;
     const category = await categoryService.createCategory(data);
     res.json({
@@ -42,7 +48,7 @@ router.post('/', auth, authorize("ADMIN"), async (req, res) => {
     });
 }); 
 
-router.patch('/:id', auth, authorize("ADMIN"), async (req, res) =>{
+router.patch('/:id', auth, authorize("ADMIN"), validateRequest({ params: idParamsSchema, body: updateCategorySchema }), async (req, res) =>{
     const id = req.params.id as string;
     const data = req.body;
     const category = await categoryService.updateCategory(id, data);
@@ -61,7 +67,7 @@ router.patch('/:id', auth, authorize("ADMIN"), async (req, res) =>{
     });
 });
 
-router.delete('/:id', auth, authorize("ADMIN"), async (req, res) => {
+router.delete('/:id', auth, authorize("ADMIN"), validateRequest({ params: idParamsSchema }), async (req, res) => {
     const id = req.params.id as string;
     const category = await categoryService.deleteCategory(id);
 

@@ -6852,3 +6852,435 @@ git add README.md src/routes/order.route.ts src/services/order/order.service.ts
 git commit -m "secure order pricing and stock updates"
 git push
 ```
+
+---
+
+# Request Validation and Centralized JSON Error Handling
+
+This stage adds reusable request validation and one global error-handling flow to the existing Express API.
+
+The goal is to:
+
+- Reject invalid request data before it reaches Prisma
+- Prevent clients from sending unauthorized fields
+- Return consistent HTTP 400 validation responses
+- Convert Prisma errors into safe JSON responses
+- Prevent Express HTML error pages
+- Prevent Prisma details and stack traces from reaching clients
+- Keep the existing authentication and authorization behavior
+
+---
+
+## Install Zod
+
+No validation library was previously installed, so Zod was added:
+
+```bash
+npm install zod
+```
+
+Zod allows the API to describe and validate the expected shape of request bodies and route parameters.
+
+---
+
+## Reusable Validation Middleware
+
+Created:
+
+```text
+src/middleware/validate.middleware.ts
+```
+
+Routes use it like this:
+
+```ts
+validateRequest({
+  params: idParamsSchema,
+  body: updateProductSchema,
+});
+```
+
+Validation flow:
+
+```text
+Request
+↓
+validation schema
+↓
+invalid → HTTP 400 JSON
+↓
+valid → sanitized req.body
+↓
+route handler
+↓
+service and Prisma
+```
+
+The schemas use strict object validation.
+
+This rejects unexpected fields instead of forwarding them to Prisma.
+
+---
+
+## Validation Files
+
+Created:
+
+```text
+src/validations/common.validation.ts
+src/validations/auth.validation.ts
+src/validations/user.validation.ts
+src/validations/category.validation.ts
+src/validations/product.validation.ts
+src/validations/order.validation.ts
+src/validations/review.validation.ts
+```
+
+---
+
+## User and Login Validation
+
+User validation checks:
+
+```text
+name is required when creating a User
+name has a sensible length
+email has a valid format
+password contains 8 to 72 characters
+update contains at least one allowed field
+```
+
+The User schema does not allow a client-supplied `role`.
+
+This prevents a request such as:
+
+```json
+{
+  "name": "Attacker",
+  "email": "attacker@example.com",
+  "password": "password123",
+  "role": "ADMIN"
+}
+```
+
+Login validation requires:
+
+```text
+valid email
+non-empty password
+```
+
+---
+
+## Category and Product Validation
+
+Category validation checks:
+
+```text
+required name on create
+ACTIVE or INACTIVE status
+at least one field on update
+```
+
+Product validation checks:
+
+```text
+required name
+price greater than or equal to zero
+stock is a nonnegative integer
+valid category UUID
+valid Product status
+at least one field on update
+```
+
+---
+
+## Order Validation
+
+Order creation accepts only:
+
+```json
+{
+  "items": [
+    {
+      "productId": "PRODUCT_UUID",
+      "quantity": 2
+    }
+  ]
+}
+```
+
+Validation requires:
+
+```text
+at least one Order item
+valid Product UUID
+positive integer quantity
+```
+
+The strict schema rejects client-supplied:
+
+```text
+userId
+totalPrice
+items[].price
+```
+
+The authenticated User and database Product prices remain the trusted sources.
+
+---
+
+## Review Validation
+
+Because the project already contains a Review model, Review requests are validated.
+
+Rules:
+
+```text
+rating must be an integer from 1 to 5
+productId must be a valid UUID
+comment is optional and length-limited
+update must contain at least one allowed field
+```
+
+---
+
+## Consistent Validation Response
+
+Invalid requests return HTTP 400:
+
+```json
+{
+  "success": false,
+  "message": "Validation failed",
+  "errors": [
+    {
+      "field": "body.price",
+      "message": "Price cannot be negative"
+    }
+  ]
+}
+```
+
+---
+
+## Centralized Error Middleware
+
+Created:
+
+```text
+src/middleware/error.middleware.ts
+```
+
+The middleware is registered after every API route:
+
+```ts
+app.use(notFoundHandler);
+app.use(globalErrorHandler);
+```
+
+Middleware order matters:
+
+```text
+normal middleware
+↓
+API routes
+↓
+JSON route-not-found handler
+↓
+global error handler
+```
+
+---
+
+## Express 5 Async Error Handling
+
+The project uses Express 5.
+
+Express 5 automatically forwards rejected async route promises to the global error middleware.
+
+Flow:
+
+```text
+async route
+↓
+service or Prisma throws
+↓
+Express 5 catches the rejected promise
+↓
+globalErrorHandler
+↓
+safe JSON response
+```
+
+No wrapper around every async route is required.
+
+The old local Order route `try/catch` was removed because Order creation errors are now handled centrally.
+
+---
+
+## Prisma Error Mapping
+
+Common Prisma errors now receive safe responses:
+
+```text
+P2002 → duplicate unique value       → 409 Conflict
+P2003 → foreign-key conflict         → 409 Conflict
+P2014 → required relation violation  → 409 Conflict
+P2015 → related record missing       → 404 Not Found
+P2023 → invalid database value       → 400 Bad Request
+P2025 → record missing               → 404 Not Found
+```
+
+Prisma validation errors return:
+
+```text
+400 Invalid database request
+```
+
+The response does not include Prisma metadata, SQL, or stack traces.
+
+---
+
+## Unexpected Server Errors
+
+Unexpected errors are logged on the server:
+
+```ts
+console.error(error);
+```
+
+The client receives only:
+
+```json
+{
+  "success": false,
+  "message": "Internal server error"
+}
+```
+
+with status:
+
+```text
+500 Internal Server Error
+```
+
+---
+
+## JSON 404 and Invalid JSON Responses
+
+Unknown routes now return JSON instead of an Express HTML page:
+
+```json
+{
+  "success": false,
+  "message": "Route not found: GET /unknown"
+}
+```
+
+Malformed JSON request bodies return:
+
+```json
+{
+  "success": false,
+  "message": "Invalid JSON body"
+}
+```
+
+---
+
+## Improved JWT Error Handling
+
+The authentication middleware now:
+
+```text
+requires the Bearer scheme
+rejects missing or empty tokens
+rejects malformed or expired tokens
+validates decoded id and role
+returns clean HTTP 401 JSON
+```
+
+Missing server configuration such as `JWT_SECRET` is forwarded to the global handler as a server error.
+
+The existing authorization middleware still returns:
+
+```text
+403 Forbidden
+```
+
+when an authenticated User does not have the required role.
+
+---
+
+## ESM Production Start Fix
+
+The generated Prisma client uses ESM features such as `import.meta`.
+
+The package configuration was updated from:
+
+```json
+"type": "commonjs"
+```
+
+to:
+
+```json
+"type": "module"
+```
+
+This matches the existing NodeNext and `.js` import conventions and allows the production build to start correctly.
+
+---
+
+## Current Validation and Error Status
+
+```text
+Reusable validation middleware          ✅
+Zod domain schemas                      ✅
+UUID route validation                   ✅
+Strict request field allow-lists        ✅
+Unauthorized User role rejected         ✅
+Order pricing fields rejected           ✅
+Review rating validation                ✅
+Consistent validation JSON              ✅
+Express 5 async error forwarding        ✅
+Centralized JSON error middleware       ✅
+Common Prisma errors mapped             ✅
+Unknown routes return JSON              ✅
+Malformed JSON returns JSON             ✅
+JWT errors return clean JSON            ✅
+Stack traces hidden from clients        ✅
+Production ESM start fixed              ✅
+```
+
+---
+
+## TypeScript and Build Checks
+
+The changes were checked with:
+
+```bash
+npm run typecheck
+npm run build
+npm start
+```
+
+Results:
+
+```text
+TypeScript typecheck passed ✅
+Production build passed     ✅
+Production startup passed   ✅
+```
+
+---
+
+## Git Commit and Push
+
+```bash
+git status
+git add .
+git commit -m "add request validation and centralized error handling"
+git push
+```

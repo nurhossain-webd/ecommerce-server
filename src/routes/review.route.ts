@@ -2,6 +2,12 @@ import { Router } from "express";
 import { reviewService } from "../services/review/review.service.js";
 import { auth } from "../middleware/auth.middleware.js";
 import { authorize } from "../middleware/authorize.middleware.js";
+import { validateRequest } from "../middleware/validate.middleware.js";
+import { idParamsSchema } from "../validations/common.validation.js";
+import {
+    createReviewSchema,
+    updateReviewSchema,
+} from "../validations/review.validation.js";
 
 const router = Router();
 
@@ -14,7 +20,7 @@ router.get("/", async (req, res) => {
   });
 });
 
-router.get("/:id", async (req, res) => {
+router.get("/:id", validateRequest({ params: idParamsSchema }), async (req, res) => {
     const id = req.params.id as string;
     const review = await reviewService.getReviewById(id);
 
@@ -32,7 +38,7 @@ router.get("/:id", async (req, res) => {
     });
 });
 
-router.post("/", auth, authorize("USER"), async (req, res) => {
+router.post("/", auth, authorize("USER"), validateRequest({ body: createReviewSchema }), async (req, res) => {
     const review = await reviewService.createReview(req.user!.id, req.body);
     res.json({
         success: true,
@@ -41,7 +47,7 @@ router.post("/", auth, authorize("USER"), async (req, res) => {
     });
 });
 
-router.patch("/:id", auth, async (req, res) => {
+router.patch("/:id", auth, validateRequest({ params: idParamsSchema, body: updateReviewSchema }), async (req, res) => {
     const id = req.params.id as string;
     const data = req.body;
     const result = await reviewService.updateReview(
@@ -72,7 +78,7 @@ router.patch("/:id", auth, async (req, res) => {
     });
 });
 
-router.delete("/:id", auth, async (req, res) => {
+router.delete("/:id", auth, validateRequest({ params: idParamsSchema }), async (req, res) => {
     const id = req.params.id as string;
     const result = await reviewService.deleteReview(
         id,

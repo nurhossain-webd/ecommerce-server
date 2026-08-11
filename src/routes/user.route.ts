@@ -2,6 +2,12 @@ import { Router } from 'express';
 import { userService } from '../services/user/user.service.js';
 import { auth } from "../middleware/auth.middleware.js";
 import { authorize } from "../middleware/authorize.middleware.js";
+import { validateRequest } from "../middleware/validate.middleware.js";
+import { idParamsSchema } from "../validations/common.validation.js";
+import {
+    createUserSchema,
+    updateUserSchema,
+} from "../validations/user.validation.js";
 
 const router = Router();
 
@@ -15,7 +21,7 @@ router.get('/', auth, authorize("ADMIN"), async (req, res) => {
     })
 })
 
-router.get('/:id', auth, authorize("ADMIN"), async (req, res) => {
+router.get('/:id', auth, authorize("ADMIN"), validateRequest({ params: idParamsSchema }), async (req, res) => {
     const id = req.params.id as string;
     const user = await userService.getUserById(id);
 
@@ -32,7 +38,7 @@ router.get('/:id', auth, authorize("ADMIN"), async (req, res) => {
         data: user
     });
 })
-router.post('/', auth, authorize("ADMIN"), async (req, res) => {
+router.post('/', auth, authorize("ADMIN"), validateRequest({ body: createUserSchema }), async (req, res) => {
     const data = req.body;
     const user = await userService.createUser(data);
    res.json({
@@ -43,7 +49,7 @@ router.post('/', auth, authorize("ADMIN"), async (req, res) => {
 });
 })
 
-router.patch('/:id', auth, authorize("ADMIN"), async (req, res) => {
+router.patch('/:id', auth, authorize("ADMIN"), validateRequest({ params: idParamsSchema, body: updateUserSchema }), async (req, res) => {
     const id = req.params.id as string;
     const data = req.body;
     const user = await userService.updateUser(id, data);
@@ -55,7 +61,7 @@ router.patch('/:id', auth, authorize("ADMIN"), async (req, res) => {
     });
 })
 
-router.delete('/:id', auth, authorize("ADMIN"), async (req, res) => {
+router.delete('/:id', auth, authorize("ADMIN"), validateRequest({ params: idParamsSchema }), async (req, res) => {
     const id = req.params.id as string;
     const user = await userService.deleteUser(id);
 
@@ -67,4 +73,3 @@ router.delete('/:id', auth, authorize("ADMIN"), async (req, res) => {
 });
 
 export default router;
-

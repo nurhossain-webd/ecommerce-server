@@ -18,6 +18,7 @@ const createProduct = async (data: {
   price: number;
   stock?: number;
   categoryId: string;
+  status?: "ACTIVE" | "OUT_OF_STOCK" | "INACTIVE";
 }) => { const product = await prisma.product.create(
         { data });
     return product;

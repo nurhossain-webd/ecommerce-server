@@ -1,9 +1,11 @@
 import { Router } from "express";
 import { authService } from "../services/auth/auth.service.js";
+import { validateRequest } from "../middleware/validate.middleware.js";
+import { loginSchema } from "../validations/auth.validation.js";
 
 const router = Router();
 
-router.post("/login", async (req, res) => {
+router.post("/login", validateRequest({ body: loginSchema }), async (req, res) => {
   const data = req.body;
 
   const user = await authService.loginUser(data);

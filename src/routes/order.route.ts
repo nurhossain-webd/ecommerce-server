@@ -1,9 +1,12 @@
 import { Router } from "express";
-import {
-  OrderCreationError,
-  orderService,
-} from "../services/order/order.service.js";
+import { orderService } from "../services/order/order.service.js";
 import { auth } from "../middleware/auth.middleware.js";
+import { validateRequest } from "../middleware/validate.middleware.js";
+import { idParamsSchema } from "../validations/common.validation.js";
+import {
+  createOrderSchema,
+  updateOrderSchema,
+} from "../validations/order.validation.js";
 
 const router = Router();
 
@@ -18,7 +21,7 @@ router.get("/", auth, async (req, res) => {
   });
 });
 
-router.get("/:id", auth, async (req, res) => {
+router.get("/:id", auth, validateRequest({ params: idParamsSchema }), async (req, res) => {
     const userId = req.user!.id;
   const id = req.params.id as string;
 
@@ -38,30 +41,19 @@ router.get("/:id", auth, async (req, res) => {
   });
 });
 
-router.post("/", auth, async (req, res) => {
-  try {
-    const order = await orderService.createOrder({
-      userId: req.user!.id,
-      items: req.body.items,
-    });
+router.post("/", auth, validateRequest({ body: createOrderSchema }), async (req, res) => {
+  const order = await orderService.createOrder({
+    userId: req.user!.id,
+    items: req.body.items,
+  });
 
-    res.json({
-      success: true,
-      message: "Order created successfully",
-      data: order,
-    });
-  } catch (error) {
-    if (error instanceof OrderCreationError) {
-      return res.status(error.statusCode).json({
-        success: false,
-        message: error.message,
-      });
-    }
-
-    throw error;
-  }
+  res.json({
+    success: true,
+    message: "Order created successfully",
+    data: order,
+  });
 });
-router.patch("/:id", auth, async (req, res) => {
+router.patch("/:id", auth, validateRequest({ params: idParamsSchema, body: updateOrderSchema }), async (req, res) => {
   const id = req.params.id as string;
   const userId = req.user!.id;
   const data = req.body;
@@ -82,7 +74,7 @@ router.patch("/:id", auth, async (req, res) => {
   });
 });
 
-router.delete("/:id", auth, async (req, res) => {
+router.delete("/:id", auth, validateRequest({ params: idParamsSchema }), async (req, res) => {
   const id = req.params.id as string;
   const userId = req.user!.id;
 

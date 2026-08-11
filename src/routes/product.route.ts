@@ -2,6 +2,12 @@ import { Router } from "express";
 import { productService } from "../services/product/product.service.js";
 import { auth } from "../middleware/auth.middleware.js";
 import { authorize } from "../middleware/authorize.middleware.js";
+import { validateRequest } from "../middleware/validate.middleware.js";
+import { idParamsSchema } from "../validations/common.validation.js";
+import {
+    createProductSchema,
+    updateProductSchema,
+} from "../validations/product.validation.js";
 
 const router = Router();
 
@@ -14,7 +20,7 @@ router.get("/", async(req, res) => {
     });
 });
 
-router.get("/:id", async(req, res) => {
+router.get("/:id", validateRequest({ params: idParamsSchema }), async(req, res) => {
     const id = req.params.id as string;
     const product = await productService.getProductById(id);
 
@@ -32,7 +38,7 @@ router.get("/:id", async(req, res) => {
     });
 });
 
-router.post("/", auth, authorize("ADMIN"), async(req, res) => {
+router.post("/", auth, authorize("ADMIN"), validateRequest({ body: createProductSchema }), async(req, res) => {
     const data = req.body;
     const product = await productService.createProduct(data);
     res.json({
@@ -42,7 +48,7 @@ router.post("/", auth, authorize("ADMIN"), async(req, res) => {
     });
 });
 
-router.patch("/:id", auth, authorize("ADMIN"), async(req, res) => {
+router.patch("/:id", auth, authorize("ADMIN"), validateRequest({ params: idParamsSchema, body: updateProductSchema }), async(req, res) => {
     const id = req.params.id as string;
     const data = req.body;
     const product = await productService.updateProduct(id, data);
@@ -61,7 +67,7 @@ router.patch("/:id", auth, authorize("ADMIN"), async(req, res) => {
     });
 });
 
-router.delete("/:id", auth, authorize("ADMIN"), async(req, res) => {
+router.delete("/:id", auth, authorize("ADMIN"), validateRequest({ params: idParamsSchema }), async(req, res) => {
     const id = req.params.id as string;
     const product = await productService.deleteProduct(id);
 

@@ -8,24 +8,45 @@ export const auth = (
 ) => {
   const authHeader = req.headers.authorization;
 
-  if (!authHeader) {
+  if (!authHeader?.startsWith("Bearer ")) {
     return res.status(401).json({
       success: false,
-      message: "Unauthorized",
+      message: "Authorization header must use the Bearer scheme",
     });
   }
 
-  const token = authHeader.split(" ")[1];
+  const token = authHeader.slice(7).trim();
+
+  if (!token || token.includes(" ")) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid authentication token",
+    });
+  }
+
+  const jwtSecret = process.env.JWT_SECRET;
+
+  if (!jwtSecret) {
+    return next(new Error("JWT_SECRET is not configured"));
+  }
 
   try {
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET as string
-    ) as { id: string; role: "USER" | "ADMIN" };
+    const decoded = jwt.verify(token, jwtSecret);
+
+    if (
+      typeof decoded === "string" ||
+      typeof decoded.id !== "string" ||
+      (decoded.role !== "USER" && decoded.role !== "ADMIN")
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid authentication token",
+      });
+    }
 
     req.user = {
       id: decoded.id,
-        role: decoded.role,
+      role: decoded.role,
     };
 
     next();
