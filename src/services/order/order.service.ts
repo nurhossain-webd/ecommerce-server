@@ -4,10 +4,14 @@ const getAllOrders = async (userId: string) => {
   const orders = await prisma.order.findMany({
     where: {
       isDeleted: false,
-        userId: userId,
+      userId: userId,
     },
     include: {
-      user: true,
+      user: {
+        omit: {
+          password: true,
+        },
+      },
       orderItems: {
         include: {
           product: true,
@@ -27,7 +31,11 @@ const getOrderById = async (id: string, userId: string) => {
       userId: userId,
     },
     include: {
-      user: true,
+      user: {
+        omit: {
+          password: true,
+        },
+      },
       orderItems: {
         include: {
           product: true,
@@ -72,30 +80,52 @@ const createOrder = async (data: {
 
 const updateOrder = async (
   id: string,
+  userId: string,
   data: {
     status?: "PENDING" | "CONFIRMED" | "SHIPPED" | "DELIVERED" | "CANCELLED";
     totalPrice?: number;
   }
 ) => {
-  const order = await prisma.order.update({
+  const existingOrder = await prisma.order.findFirst({
     where: {
       id,
+      userId,
+      isDeleted: false,
     },
+  });
+
+  if (!existingOrder) {
+    return null;
+  }
+
+  const order = await prisma.order.update({
+    where: { id },
     data,
   });
 
   return order;
 };
 
-const deleteOrder = async (id: string) => {
-  const order = await prisma.order.update({
+const deleteOrder = async (id: string, userId: string) => {
+    const existingOrder = await prisma.order.findFirst({
     where: {
       id,
-    },
-    data: {
-      isDeleted: true,
+      userId,
+      isDeleted: false,
     },
   });
+
+  if (!existingOrder) {
+    return null;
+  } 
+ const order = await prisma.order.update({
+  where: {
+    id,
+  },
+  data: {
+    isDeleted: true,
+  },
+});
 
   return order;
 };

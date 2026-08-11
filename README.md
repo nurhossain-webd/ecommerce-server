@@ -4726,3 +4726,643 @@ git add .
 git commit -m "add JWT authentication and protect order routes"
 git push
 ```
+
+# Order Ownership Protection and Error Handling
+
+## Goal
+
+This stage improves the JWT-protected Order API by adding ownership checks, preventing access to deleted Orders, hiding password hashes from related User data, and returning clean 404 responses when an Order cannot be accessed.
+
+## Authentication vs Ownership
+
+Adding `auth` to a route:
+
+```ts
+router.patch("/:id", auth, ...)
+```
+
+proves that the requester has a valid JWT. It does not prove that the requested Order belongs to that User.
+
+We therefore need both:
+
+```text
+Authentication -> Is this User logged in?
+Ownership      -> Does this Order belong to this User?
+```
+
+The authenticated User ID comes from:
+
+```ts
+const userId = req.user!.id;
+```
+
+It comes from the verified JWT, not `req.body.userId`.
+
+## Protect Get All Orders
+
+```ts
+const getAllOrders = async (userId: string) => {
+  const orders = await prisma.order.findMany({
+    where: {
+      isDeleted: false,
+      userId: userId,
+    },
+    include: {
+      user: {
+        omit: {
+          password: true,
+        },
+      },
+      orderItems: {
+        include: {
+          product: true,
+        },
+      },
+    },
+  });
+
+  return orders;
+};
+```
+
+The `where` block means only active Orders belonging to the authenticated User are returned.
+
+```ts
+userId: userId;
+```
+
+can also be written as:
+
+```ts
+userId;
+```
+
+when the property and variable have the same name.
+
+## Password Hash Leak Through Relation
+
+Originally we used:
+
+```ts
+user: true;
+```
+
+This included the complete related User and caused the password hash to appear in the Order response.
+
+We changed it to:
+
+```ts
+user: {
+  omit: {
+    password: true,
+  },
+},
+```
+
+This still includes the related User but prevents Prisma from returning `password`.
+
+A hashed password should still not be exposed to the client.
+
+## Why `orderItems` Still Uses `include`
+
+```ts
+orderItems: {
+  include: {
+    product: true,
+  },
+},
+```
+
+This is separate from password protection.
+
+The relation is:
+
+```text
+Order
+  -> OrderItem
+      -> Product
+```
+
+`orderItems` includes the items belonging to the Order. The nested `product: true` includes the Product related to each OrderItem.
+
+So the response structure is roughly:
+
+```text
+Order
+├── User
+│   └── password omitted
+└── OrderItems
+    └── Product
+```
+
+## Protect Get Order By ID
+
+```ts
+const getOrderById = async (id: string, userId: string) => {
+  const order = await prisma.order.findUnique({
+    where: {
+      id,
+      isDeleted: false,
+      userId: userId,
+    },
+    include: {
+      user: {
+        omit: {
+          password: true,
+        },
+      },
+      orderItems: {
+        include: {
+          product: true,
+        },
+      },
+    },
+  });
+
+  return order;
+};
+```
+
+The query checks:
+
+```text
+correct Order ID
+AND
+belongs to authenticated User
+AND
+is not soft deleted
+```
+
+## NEW: Ownership Check Before Update
+
+The new Update logic first checks whether an accessible Order exists:
+
+```ts
+const existingOrder = await prisma.order.findFirst({
+  where: {
+    id,
+    userId,
+    isDeleted: false,
+  },
+});
+```
+
+Why `findFirst()`?
+
+Before modifying the database, we want to ask:
+
+```text
+Does an active Order with this ID belong to this authenticated User?
+```
+
+Each condition has a purpose:
+
+```ts
+id;
+```
+
+identifies the requested Order.
+
+```ts
+userId;
+```
+
+ensures the Order belongs to the authenticated User.
+
+```ts
+isDeleted: false;
+```
+
+prevents modification of an already soft-deleted Order.
+
+Together:
+
+```text
+correct Order + correct owner + active = allowed
+```
+
+## Why Return `null`
+
+After checking:
+
+```ts
+if (!existingOrder) {
+  return null;
+}
+```
+
+No matching Order can mean:
+
+```text
+Order does not exist
+OR
+Order belongs to another User
+OR
+Order is already deleted
+```
+
+Instead of continuing to `update()` and potentially getting a Prisma error, the service returns `null`.
+
+The route can then convert that result into a clean HTTP response.
+
+## Full Update Service
+
+```ts
+const updateOrder = async (
+  id: string,
+  userId: string,
+  data: {
+    status?: "PENDING" | "CONFIRMED" | "SHIPPED" | "DELIVERED" | "CANCELLED";
+    totalPrice?: number;
+  },
+) => {
+  const existingOrder = await prisma.order.findFirst({
+    where: {
+      id,
+      userId,
+      isDeleted: false,
+    },
+  });
+
+  if (!existingOrder) {
+    return null;
+  }
+
+  const order = await prisma.order.update({
+    where: {
+      id,
+    },
+    data,
+  });
+
+  return order;
+};
+```
+
+## NEW: Ownership Check Before Delete
+
+Delete uses the same check:
+
+```ts
+const existingOrder = await prisma.order.findFirst({
+  where: {
+    id,
+    userId,
+    isDeleted: false,
+  },
+});
+
+if (!existingOrder) {
+  return null;
+}
+```
+
+This prevents a User from deleting another User's Order and prevents repeatedly deleting an already deleted Order.
+
+## Why `isDeleted` Appears Twice
+
+Soft delete uses:
+
+```ts
+where: {
+  isDeleted: false,
+}
+```
+
+and:
+
+```ts
+data: {
+  isDeleted: true,
+}
+```
+
+They have different purposes.
+
+The first means:
+
+```text
+Find/check an Order that is currently active.
+```
+
+The second means:
+
+```text
+Change that Order so it is now marked deleted.
+```
+
+Flow:
+
+```text
+isDeleted: false
+        ↓
+find active Order
+        ↓
+isDeleted: true
+        ↓
+mark Order deleted
+```
+
+The row remains in PostgreSQL. This is a soft delete.
+
+## Full Delete Service
+
+```ts
+const deleteOrder = async (id: string, userId: string) => {
+  const existingOrder = await prisma.order.findFirst({
+    where: {
+      id,
+      userId,
+      isDeleted: false,
+    },
+  });
+
+  if (!existingOrder) {
+    return null;
+  }
+
+  const order = await prisma.order.update({
+    where: {
+      id,
+    },
+    data: {
+      isDeleted: true,
+    },
+  });
+
+  return order;
+};
+```
+
+## NEW: Route Handles `null`
+
+Because the service can now return `null`, PATCH adds:
+
+```ts
+if (!order) {
+  return res.status(404).json({
+    success: false,
+    message: "Order not found",
+  });
+}
+```
+
+DELETE adds the same check.
+
+The flow is:
+
+```text
+Service searches for owned active Order
+↓
+nothing found
+↓
+return null
+↓
+route sees !order
+↓
+HTTP 404
+```
+
+This produces:
+
+```json
+{
+  "success": false,
+  "message": "Order not found"
+}
+```
+
+instead of a raw Prisma/HTML error.
+
+## Why Use the Same `Order not found` Message for Another User's Order?
+
+Suppose User A requests an Order belonging to User B.
+
+The query requires both:
+
+```text
+requested Order ID
+AND
+User A's ID
+```
+
+so no matching accessible Order is found.
+
+We return:
+
+```text
+Order not found
+```
+
+rather than confirming that another User's Order exists. This avoids unnecessarily exposing information about resources the requester does not own.
+
+## TypeScript Problem: `req.params.id`
+
+We encountered:
+
+```text
+Argument of type 'string | string[]' is not assignable to parameter of type 'string'.
+```
+
+Our service expects:
+
+```ts
+id: string;
+```
+
+so we used:
+
+```ts
+const id = req.params.id as string;
+```
+
+`as string` is a TypeScript type assertion. It tells TypeScript to treat this route parameter as a string. It does not transform the value at runtime.
+
+## PATCH Route
+
+```ts
+router.patch("/:id", auth, async (req, res) => {
+  const id = req.params.id as string;
+  const data = req.body;
+  const userId = req.user!.id;
+
+  const order = await orderService.updateOrder(id, userId, data);
+
+  if (!order) {
+    return res.status(404).json({
+      success: false,
+      message: "Order not found",
+    });
+  }
+
+  res.json({
+    success: true,
+    message: "Order updated successfully",
+    data: order,
+  });
+});
+```
+
+## DELETE Route
+
+```ts
+router.delete("/:id", auth, async (req, res) => {
+  const id = req.params.id as string;
+  const userId = req.user!.id;
+
+  const order = await orderService.deleteOrder(id, userId);
+
+  if (!order) {
+    return res.status(404).json({
+      success: false,
+      message: "Order not found",
+    });
+  }
+
+  res.json({
+    success: true,
+    message: "Order deleted successfully",
+    data: order,
+  });
+});
+```
+
+## Testing
+
+A fake valid-format UUID was used to test PATCH and DELETE.
+
+Expected result:
+
+```json
+{
+  "success": false,
+  "message": "Order not found"
+}
+```
+
+Both ownership/not-found checks returned the clean response successfully.
+
+During PATCH testing, an entire curl command was accidentally pasted after `Bearer`, causing:
+
+```text
+Invalid or expired token
+```
+
+The Authorization header must contain only:
+
+```text
+Authorization: Bearer ACTUAL_JWT_TOKEN
+```
+
+## Complete Security Flow
+
+```text
+JWT
+↓
+auth middleware
+↓
+authenticated userId
+↓
+Order ID from URL
+↓
+findFirst({
+  id,
+  userId,
+  isDeleted: false
+})
+↓
+Does active Order belong to User?
+├── NO  -> return null -> route returns 404
+└── YES -> update/delete allowed
+```
+
+## Concepts Learned
+
+**Authentication**
+
+```text
+Who are you?
+```
+
+Handled by JWT and `auth`.
+
+**Authorization / ownership**
+
+```text
+Are you allowed to access this Order?
+```
+
+Handled using `id + userId`.
+
+**Soft delete**
+
+```text
+Keep the database row but set isDeleted = true.
+```
+
+**Safe relation response**
+
+Use:
+
+```ts
+user: {
+  omit: {
+    password: true,
+  },
+}
+```
+
+instead of exposing the complete User relation.
+
+**Service vs route error handling**
+
+Service:
+
+```ts
+return null;
+```
+
+Route:
+
+```ts
+if (!order) {
+  return res.status(404).json(...);
+}
+```
+
+The service handles database/business logic. The route handles the HTTP response.
+
+## Current Status
+
+```text
+All Order routes require JWT             ✅
+Create uses User ID from JWT             ✅
+Get all filters by owner                 ✅
+Get one filters by owner                 ✅
+Update checks ownership                  ✅
+Delete checks ownership                  ✅
+Soft-deleted Orders excluded             ✅
+Already deleted Order protected          ✅
+Missing/inaccessible Order returns 404   ✅
+Password omitted from User relation      ✅
+OrderItems include related Product       ✅
+```
+
+## Next Steps
+
+```text
+Role-based authorization (USER / ADMIN)
+Input validation
+Centralized error handling
+Server-side Order price calculation
+Stock validation
+```
+
+## Git Commit
+
+```bash
+git status
+git add .
+git commit -m "add order ownership and error handling"
+git push
+```

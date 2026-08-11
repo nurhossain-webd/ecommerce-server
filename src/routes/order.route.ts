@@ -51,9 +51,17 @@ router.post("/", auth, async (req, res) => {
 });
 router.patch("/:id", auth, async (req, res) => {
   const id = req.params.id as string;
+  const userId = req.user!.id;
   const data = req.body;
 
-  const order = await orderService.updateOrder(id, data);
+  const order = await orderService.updateOrder(id, userId, data);
+
+  if (!order) {
+    return res.status(404).json({
+      success: false,
+      message: "Order not found",
+    });
+  }
 
   res.json({
     success: true,
@@ -64,8 +72,16 @@ router.patch("/:id", auth, async (req, res) => {
 
 router.delete("/:id", auth, async (req, res) => {
   const id = req.params.id as string;
+  const userId = req.user!.id;
 
-  const order = await orderService.deleteOrder(id);
+  const order = await orderService.deleteOrder(id, userId);
+
+  if (!order) {
+    return res.status(404).json({
+      success: false,
+      message: "Order not found",
+    });
+  }
 
   res.json({
     success: true,
@@ -73,5 +89,4 @@ router.delete("/:id", auth, async (req, res) => {
     data: order,
   });
 });
-
 export default router;
