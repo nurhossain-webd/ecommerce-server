@@ -23,7 +23,43 @@ const createReview = async (data: {
     return review;
 }
 
+const getReviewById = async (id: string) => {
+    const review = await prisma.review.findUnique({
+        where: {
+            id: id,
+            isDeleted: false
+        },
+        include: {
+            product: true,
+            user: true,
+        }
+    });
+    return review;
+};
+
+const updateReview = async (
+    id: string,
+    data: {rating?: number;
+    comment?: string;
+}) => {
+    const review = await prisma.review.update({
+        where: {id},
+        data, });
+    return review;
+};
+
+const deleteReview = async (id: string) => {
+    const review = await prisma.review.update({
+        where: {id},
+        data: {isDeleted: true},
+    });
+    return review;
+};
+
 export const reviewService = {
     getAllReviews,
     createReview,
+    getReviewById,
+    updateReview,
+    deleteReview
 }
