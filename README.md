@@ -5971,3 +5971,447 @@ git add .
 git commit -m "add role based authorization"
 git push
 ```
+
+---
+
+# Review Authentication, Ownership, and ADMIN Moderation
+
+This stage secures the existing Review CRUD API.
+
+The Review model, service, routes, User relation, Product relation, and soft delete were already created earlier.
+
+The goal of this stage is to:
+
+- Allow normal GET Review requests
+- Require authentication when creating a Review
+- Allow only a `USER` to create a Review
+- Get the Review owner from the verified JWT
+- Never trust `userId` from `req.body`
+- Allow a User to update or delete only their own Review
+- Allow an ADMIN to manage any active Review
+- Return clean `404` and `403` JSON responses
+- Hide password hashes from Review relations
+- Preserve Review soft delete
+
+---
+
+## Existing Review Model
+
+The Prisma schema already contains:
+
+```prisma
+model Review {
+  id        String   @id @default(uuid()) @db.Uuid
+  rating    Int
+  comment   String?
+  isDeleted Boolean  @default(false)
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id])
+
+  productId String  @db.Uuid
+  product   Product @relation(fields: [productId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([productId])
+  @@map("reviews")
+}
+```
+
+This means:
+
+```text
+Review belongs to one User
+Review belongs to one Product
+Review supports soft delete
+```
+
+No new Prisma model or migration was needed for this stage.
+
+---
+
+## Current Review Routes
+
+```text
+GET    /api/reviews       → Public: get active Reviews
+GET    /api/reviews/:id   → Public: get one active Review
+POST   /api/reviews       → USER only: create a Review
+PATCH  /api/reviews/:id   → Owner or ADMIN: update a Review
+DELETE /api/reviews/:id   → Owner or ADMIN: soft delete a Review
+```
+
+---
+
+## Protect Review Creation
+
+The create route now uses:
+
+```ts
+router.post("/", auth, authorize("USER"), async (req, res) => {
+  const review = await reviewService.createReview(
+    req.user!.id,
+    req.body
+  );
+
+  res.json({
+    success: true,
+    message: "Review created successfully",
+    data: review,
+  });
+});
+```
+
+The middleware flow is:
+
+```text
+Request
+↓
+auth verifies JWT
+↓
+req.user is created
+↓
+authorize("USER") checks the role
+↓
+route uses req.user.id
+↓
+Review is created
+```
+
+An ADMIN can moderate Reviews but does not create a normal customer Review through this route.
+
+---
+
+## Never Trust `userId` From the Request Body
+
+Unsafe:
+
+```ts
+const userId = req.body.userId;
+```
+
+A client could send another User's ID and create a Review under that account.
+
+The secure version uses:
+
+```ts
+req.user!.id
+```
+
+This ID comes from the verified JWT.
+
+The Review service receives the authenticated ID separately:
+
+```ts
+const createReview = async (
+  userId: string,
+  data: {
+    rating: number;
+    comment?: string;
+    productId: string;
+  }
+) => {
+  const review = await prisma.review.create({
+    data: {
+      rating: data.rating,
+      comment: data.comment,
+      productId: data.productId,
+      userId,
+    },
+  });
+
+  return review;
+};
+```
+
+The service explicitly selects allowed fields instead of spreading the complete request body.
+
+This prevents the client from secretly sending fields such as:
+
+```text
+userId
+isDeleted
+createdAt
+updatedAt
+```
+
+---
+
+## Review Ownership Check
+
+Before update or delete, the service finds the active Review:
+
+```ts
+const existingReview = await prisma.review.findFirst({
+  where: {
+    id,
+    isDeleted: false,
+  },
+  select: {
+    userId: true,
+  },
+});
+```
+
+If the Review does not exist or was already soft deleted:
+
+```ts
+return { status: "notFound" as const };
+```
+
+Then ownership is checked:
+
+```ts
+if (role !== "ADMIN" && existingReview.userId !== userId) {
+  return { status: "forbidden" as const };
+}
+```
+
+The rule is:
+
+```text
+ADMIN
+→ may manage any active Review
+
+USER who owns the Review
+→ may update or delete it
+
+USER who does not own the Review
+→ receives 403 Forbidden
+```
+
+The owner ID comes from:
+
+```ts
+req.user!.id
+```
+
+The role comes from:
+
+```ts
+req.user!.role
+```
+
+Both values were created by the JWT authentication middleware.
+
+---
+
+## Clean 404 Response
+
+If the Review is missing or soft deleted, the route returns:
+
+```json
+{
+  "success": false,
+  "message": "Review not found"
+}
+```
+
+with HTTP status:
+
+```text
+404 Not Found
+```
+
+---
+
+## Clean 403 Response
+
+If a normal User tries to update another User's Review:
+
+```json
+{
+  "success": false,
+  "message": "You cannot update this review"
+}
+```
+
+If a normal User tries to delete another User's Review:
+
+```json
+{
+  "success": false,
+  "message": "You cannot delete this review"
+}
+```
+
+Both responses use:
+
+```text
+403 Forbidden
+```
+
+---
+
+## Preserve Soft Delete
+
+Normal Review GET requests use:
+
+```ts
+where: {
+  isDeleted: false,
+}
+```
+
+Delete does not remove the database row.
+
+It updates:
+
+```ts
+data: {
+  isDeleted: true,
+}
+```
+
+Flow:
+
+```text
+DELETE Review
+↓
+Ownership or ADMIN permission checked
+↓
+isDeleted becomes true
+↓
+Review stays in PostgreSQL
+↓
+Normal GET requests no longer return it
+```
+
+---
+
+## Safe User and Product Relations
+
+GET Review requests return only useful public relation fields:
+
+```ts
+include: {
+  product: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  user: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+}
+```
+
+The User password is never selected.
+
+The API does not return:
+
+```text
+password
+email
+role
+isDeleted
+```
+
+through the Review User relation.
+
+---
+
+## Review Security Flow
+
+```text
+Create Review
+↓
+auth
+↓
+authorize("USER")
+↓
+userId from verified JWT
+↓
+allowed fields saved
+```
+
+```text
+Update or Delete Review
+↓
+auth
+↓
+find active Review
+↓
+missing or deleted → 404
+↓
+ADMIN → allowed
+↓
+owner USER → allowed
+↓
+different USER → 403
+```
+
+---
+
+## Current Review Security Status
+
+```text
+Review model exists                    ✅
+Review relations exist                ✅
+Public active Review GET routes       ✅
+Authenticated Review creation         ✅
+Create route restricted to USER       ✅
+userId comes from verified JWT        ✅
+Request body fields are restricted    ✅
+Owner can update own Review            ✅
+Owner can delete own Review            ✅
+Other USER receives 403               ✅
+ADMIN can moderate Reviews            ✅
+Missing/deleted Review returns 404    ✅
+Soft delete preserved                 ✅
+Password hashes are never returned    ✅
+```
+
+---
+
+## TypeScript and Prisma Checks
+
+The completed Review changes were checked with:
+
+```bash
+npm run typecheck
+npm run build
+npx prisma validate
+```
+
+Results:
+
+```text
+TypeScript typecheck passed ✅
+Production build passed     ✅
+Prisma schema valid         ✅
+```
+
+---
+
+## Git Commit
+
+Check the changed files:
+
+```bash
+git status
+```
+
+Stage the current backend and README changes:
+
+```bash
+git add .
+```
+
+Create the commit:
+
+```bash
+git commit -m "secure category product and review routes"
+```
+
+Push the commit:
+
+```bash
+git push
+```

@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { reviewService } from "../services/review/review.service.js";
+import { auth } from "../middleware/auth.middleware.js";
+import { authorize } from "../middleware/authorize.middleware.js";
 
 const router = Router();
 
@@ -13,7 +15,7 @@ router.get("/", async (req, res) => {
 });
 
 router.get("/:id", async (req, res) => {
-    const id = req.params.id;
+    const id = req.params.id as string;
     const review = await reviewService.getReviewById(id);
 
     if (!review) {
@@ -30,9 +32,8 @@ router.get("/:id", async (req, res) => {
     });
 });
 
-router.post("/", async (req, res) => {
-    const data = req.body;
-    const review = await reviewService.createReview(data);
+router.post("/", auth, authorize("USER"), async (req, res) => {
+    const review = await reviewService.createReview(req.user!.id, req.body);
     res.json({
         success: true,
         message: "Review created successfully",
@@ -40,26 +41,63 @@ router.post("/", async (req, res) => {
     });
 });
 
-router.patch("/:id", async (req, res) => {
-    const id = req.params.id;
+router.patch("/:id", auth, async (req, res) => {
+    const id = req.params.id as string;
     const data = req.body;
-    const review = await reviewService.updateReview(id, data);
+    const result = await reviewService.updateReview(
+        id,
+        req.user!.id,
+        req.user!.role,
+        data
+    );
+
+    if (result.status === "notFound") {
+        return res.status(404).json({
+            success: false,
+            message: "Review not found"
+        });
+    }
+
+    if (result.status === "forbidden") {
+        return res.status(403).json({
+            success: false,
+            message: "You cannot update this review"
+        });
+    }
 
     res.json({
         success: true,
         message: "Review updated successfully",
-        data: review
+        data: result.data
     });
 });
 
-router.delete("/:id", async (req, res) => {
-    const id = req.params.id;
-    const review = await reviewService.deleteReview(id);
+router.delete("/:id", auth, async (req, res) => {
+    const id = req.params.id as string;
+    const result = await reviewService.deleteReview(
+        id,
+        req.user!.id,
+        req.user!.role
+    );
+
+    if (result.status === "notFound") {
+        return res.status(404).json({
+            success: false,
+            message: "Review not found"
+        });
+    }
+
+    if (result.status === "forbidden") {
+        return res.status(403).json({
+            success: false,
+            message: "You cannot delete this review"
+        });
+    }
 
     res.json({
         success: true,
         message: "Review deleted successfully",
-        data: review
+        data: result.data
     });
 });
 export default router;

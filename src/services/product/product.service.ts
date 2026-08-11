@@ -45,6 +45,14 @@ const updateProduct = async (
     stock?: number;
     status?: "ACTIVE" | "OUT_OF_STOCK" | "INACTIVE";
     categoryId?: string; }) => {
+    const existingProduct = await prisma.product.findFirst({
+        where: { id, isDeleted: false },
+    });
+
+    if (!existingProduct) {
+        return null;
+    }
+
     const product = await prisma.product.update({
         where: {id},
         data, });
@@ -52,6 +60,14 @@ const updateProduct = async (
 };
 
 const deleteProduct = async (id: string) => {
+    const existingProduct = await prisma.product.findFirst({
+        where: { id, isDeleted: false },
+    });
+
+    if (!existingProduct) {
+        return null;
+    }
+
     const product = await prisma.product.update({
         where: {id},
         data: {isDeleted: true},

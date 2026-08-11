@@ -1,4 +1,6 @@
-import prisma from "../../lib/prisma.js"
+import prisma from "../../lib/prisma.js";
+
+type UserRole = "USER" | "ADMIN";
 
 const getAllReviews = async () => {
     const reviews = await prisma.review.findMany({
@@ -6,22 +8,31 @@ const getAllReviews = async () => {
             isDeleted: false,
         },
         include: {
-            product: true,
-            user: true,
+            product: {
+                select: { id: true, name: true },
+            },
+            user: {
+                select: { id: true, name: true },
+            },
         }
     });
     return reviews;
 };
 
-const createReview = async (data: {
+const createReview = async (userId: string, data: {
   rating: number;
   comment?: string;
-  userId: string;
   productId: string;}) => { 
-    const review = await prisma.review.create(
-        { data });
+    const review = await prisma.review.create({
+        data: {
+            rating: data.rating,
+            comment: data.comment,
+            productId: data.productId,
+            userId,
+        },
+    });
     return review;
-}
+};
 
 const getReviewById = async (id: string) => {
     const review = await prisma.review.findUnique({
@@ -30,8 +41,12 @@ const getReviewById = async (id: string) => {
             isDeleted: false
         },
         include: {
-            product: true,
-            user: true,
+            product: {
+                select: { id: true, name: true },
+            },
+            user: {
+                select: { id: true, name: true },
+            },
         }
     });
     return review;
@@ -39,21 +54,53 @@ const getReviewById = async (id: string) => {
 
 const updateReview = async (
     id: string,
+    userId: string,
+    role: UserRole,
     data: {rating?: number;
     comment?: string;
 }) => {
+    const existingReview = await prisma.review.findFirst({
+        where: { id, isDeleted: false },
+        select: { userId: true },
+    });
+
+    if (!existingReview) {
+        return { status: "notFound" as const };
+    }
+
+    if (role !== "ADMIN" && existingReview.userId !== userId) {
+        return { status: "forbidden" as const };
+    }
+
     const review = await prisma.review.update({
         where: {id},
-        data, });
-    return review;
+        data: {
+            rating: data.rating,
+            comment: data.comment,
+        },
+    });
+    return { status: "success" as const, data: review };
 };
 
-const deleteReview = async (id: string) => {
+const deleteReview = async (id: string, userId: string, role: UserRole) => {
+    const existingReview = await prisma.review.findFirst({
+        where: { id, isDeleted: false },
+        select: { userId: true },
+    });
+
+    if (!existingReview) {
+        return { status: "notFound" as const };
+    }
+
+    if (role !== "ADMIN" && existingReview.userId !== userId) {
+        return { status: "forbidden" as const };
+    }
+
     const review = await prisma.review.update({
         where: {id},
         data: {isDeleted: true},
     });
-    return review;
+    return { status: "success" as const, data: review };
 };
 
 export const reviewService = {
@@ -62,4 +109,4 @@ export const reviewService = {
     getReviewById,
     updateReview,
     deleteReview
-}
+};

@@ -32,6 +32,14 @@ const updateCategory = async (
     data:{name?: string;
         status?: "ACTIVE" | "INACTIVE"
     }) => {
+    const existingCategory = await prisma.category.findFirst({
+        where: { id, isDeleted: false },
+    });
+
+    if (!existingCategory) {
+        return null;
+    }
+
     const category = await prisma.category.update({
         where: {id},
         data, });
@@ -39,6 +47,14 @@ const updateCategory = async (
 };  
 
 const deleteCategory = async (id: string) => {
+    const existingCategory = await prisma.category.findFirst({
+        where: { id, isDeleted: false },
+    });
+
+    if (!existingCategory) {
+        return null;
+    }
+
     const category = await prisma.category.update({
         where: {id},
         data: {isDeleted: true},
@@ -52,4 +68,4 @@ export const categoryService = {
     updateCategory,
     deleteCategory,
      
-} 
+}

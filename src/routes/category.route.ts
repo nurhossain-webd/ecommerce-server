@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { categoryService } from '../services/category/category.service.js';
+import { auth } from "../middleware/auth.middleware.js";
+import { authorize } from "../middleware/authorize.middleware.js";
 
 const router = Router();
 
@@ -13,7 +15,7 @@ res.json({
 });
 
 router.get('/:id', async (req, res) => {
-    const id = req.params.id;
+    const id = req.params.id as string;
     const category = await categoryService.getCategoryById(id);
 
     if (!category) {
@@ -30,7 +32,7 @@ router.get('/:id', async (req, res) => {
     });
 });
 
-router.post('/', async (req, res) => {
+router.post('/', auth, authorize("ADMIN"), async (req, res) => {
     const data = req.body;
     const category = await categoryService.createCategory(data);
     res.json({
@@ -40,10 +42,17 @@ router.post('/', async (req, res) => {
     });
 }); 
 
-router.patch('/:id', async (req, res) =>{
-    const id = req.params.id;
+router.patch('/:id', auth, authorize("ADMIN"), async (req, res) =>{
+    const id = req.params.id as string;
     const data = req.body;
     const category = await categoryService.updateCategory(id, data);
+
+    if (!category) {
+        return res.status(404).json({
+            success: false,
+            message: "Category not found"
+        });
+    }
 
     res.json({
         success: true,
@@ -52,9 +61,16 @@ router.patch('/:id', async (req, res) =>{
     });
 });
 
-router.delete('/:id', async (req, res) => {
-    const id = req.params.id;
+router.delete('/:id', auth, authorize("ADMIN"), async (req, res) => {
+    const id = req.params.id as string;
     const category = await categoryService.deleteCategory(id);
+
+    if (!category) {
+        return res.status(404).json({
+            success: false,
+            message: "Category not found"
+        });
+    }
 
     res.json({
         success: true,
